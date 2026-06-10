@@ -68,9 +68,9 @@ export default function Unlock({ userEmail, onUnlocked, onSignOut }: Props): JSX
   if (noAccess) {
     return (
       <div className="flex h-full items-center justify-center bg-ink-900 p-6">
-        <div className="card w-full max-w-sm p-8 text-center shadow-xl">
+        <div className="card animate-fade-up w-full max-w-sm p-8 text-center">
           <img src={logo} alt="Inside" className="mx-auto mb-4 h-6 w-auto opacity-90" />
-          <h1 className="text-lg font-semibold text-white">Sem acesso ao cofre</h1>
+          <h1 className="font-display text-xl font-bold text-white">Sem acesso ao cofre</h1>
           <p className="mt-2 text-sm text-slate-400">
             Sua conta ({userEmail}) ainda não tem acesso ao cofre. Peça a um <b>admin</b> para liberar
             — ele vai te passar uma senha temporária.
@@ -95,10 +95,10 @@ export default function Unlock({ userEmail, onUnlocked, onSignOut }: Props): JSX
 
   return (
     <div className="flex h-full items-center justify-center bg-ink-900 p-6">
-      <form onSubmit={submit} className="card w-full max-w-sm p-8 shadow-xl">
+      <form onSubmit={submit} className="card animate-fade-up w-full max-w-sm p-8">
         <div className="mb-6">
           <img src={logo} alt="Inside" className="mb-4 h-6 w-auto opacity-90" />
-          <h1 className="text-lg font-semibold text-white">{title}</h1>
+          <h1 className="font-display text-xl font-bold text-white">{title}</h1>
           <p className="mt-1 text-sm text-slate-400">{subtitle}</p>
         </div>
 

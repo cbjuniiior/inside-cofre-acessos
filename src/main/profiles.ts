@@ -11,6 +11,7 @@ interface ProfileRow {
   url: string
   tags: string[] | null
   proxy_id: string | null
+  needs_login: boolean
   in_use_by: string | null
   in_use_by_email: string | null
   in_use_by_name: string | null
@@ -29,6 +30,7 @@ function rowToProfile(r: ProfileRow): Profile {
     url: r.url,
     tags: r.tags ?? [],
     proxy_id: r.proxy_id,
+    needs_login: r.needs_login ?? false,
     in_use_by: r.in_use_by,
     in_use_by_email: r.in_use_by_email,
     in_use_by_name: r.in_use_by_name,

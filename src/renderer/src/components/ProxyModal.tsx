@@ -113,8 +113,8 @@ export default function ProxyModal({ onClose }: { onClose: () => void }): JSX.El
 
   return (
     <div className="fixed inset-0 z-10 flex items-center justify-center bg-black/60 p-6 backdrop-blur-sm">
-      <div className="card flex max-h-full w-full max-w-2xl flex-col p-6 shadow-2xl">
-        <h2 className="mb-1 text-lg font-semibold text-white">Proxies</h2>
+      <div className="card animate-scale-in flex max-h-full w-full max-w-2xl flex-col p-6">
+        <h2 className="mb-1 font-display text-xl font-bold text-white">Proxies</h2>
         <p className="mb-4 text-sm text-slate-400">
           Cadastre proxies reutilizáveis e atribua a perfis. Cada perfil sai sempre pelo mesmo IP.
         </p>

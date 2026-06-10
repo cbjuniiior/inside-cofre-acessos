@@ -22,3 +22,4 @@ mac:
 # detectados automaticamente; o app passa a procurar updates nos Releases do repo.
 publish:
   provider: github
+  releaseType: release # publica direto (sem ficar como rascunho)

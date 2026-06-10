@@ -23,39 +23,56 @@ export default function Login({ onSignedIn }: { onSignedIn: () => void }): JSX.E
   }
 
   return (
-    <div className="flex h-full items-center justify-center bg-ink-900 p-6">
-      <form onSubmit={submit} className="card w-full max-w-sm p-8 shadow-xl">
-        <div className="mb-6">
-          <img src={logo} alt="Inside" className="mb-4 h-7 w-auto" />
-          <h1 className="text-base font-semibold text-white">Cofre de Acessos</h1>
-          <p className="mt-1 text-sm text-slate-400">Entre com sua conta do time.</p>
-        </div>
+    <div className="flex h-full items-center justify-center p-6">
+      <div className="animate-fade-up w-full max-w-sm">
+        <form onSubmit={submit} className="card overflow-hidden p-8">
+          {/* linha de destaque no topo do card */}
+          <div className="-mx-8 -mt-8 mb-7 h-px bg-gradient-to-r from-transparent via-brand-500/60 to-transparent" />
 
-        <label className="mb-1 block text-sm font-medium text-slate-300">E-mail</label>
-        <input
-          type="email"
-          required
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          className="field mb-4"
-          placeholder="voce@inside.com"
-        />
+          <img src={logo} alt="Inside" className="mb-5 h-7 w-auto" />
+          <h1 className="font-display text-2xl font-bold text-white">Cofre de Acessos</h1>
+          <p className="mb-7 mt-1.5 text-sm text-slate-400">
+            Acesso seguro às contas dos clientes.
+          </p>
 
-        <label className="mb-1 block text-sm font-medium text-slate-300">Senha</label>
-        <input
-          type="password"
-          required
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          className="field mb-4"
-        />
+          <label className="mb-1.5 block text-xs font-medium uppercase tracking-wide text-slate-500">
+            E-mail
+          </label>
+          <input
+            type="email"
+            required
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            className="field mb-4"
+            placeholder="voce@inside.com"
+          />
 
-        {error && <p className="mb-3 text-sm text-red-400">{error}</p>}
+          <label className="mb-1.5 block text-xs font-medium uppercase tracking-wide text-slate-500">
+            Senha
+          </label>
+          <input
+            type="password"
+            required
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            className="field mb-5"
+          />
 
-        <button type="submit" disabled={busy} className="btn-primary w-full">
-          {busy ? 'Entrando…' : 'Entrar'}
-        </button>
-      </form>
+          {error && (
+            <p className="mb-4 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+              {error}
+            </p>
+          )}
+
+          <button type="submit" disabled={busy} className="btn-primary w-full">
+            {busy ? 'Entrando…' : 'Entrar'}
+          </button>
+        </form>
+
+        <p className="mt-5 text-center text-xs text-slate-600">
+          Inside · ferramenta interna do time
+        </p>
+      </div>
     </div>
   )
 }

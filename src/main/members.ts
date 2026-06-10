@@ -18,3 +18,27 @@ export async function setMemberRole(id: string, role: Role): Promise<void> {
   const { error } = await sb.from('members').update({ role }).eq('id', id)
   if (error) throw new Error(error.message)
 }
+
+/** Admin cria um novo membro (via Edge Function com service_role). */
+export async function createMember(
+  email: string,
+  name: string
+): Promise<{ tempPassword: string; email: string }> {
+  const sb = getSupabase()
+  const { data, error } = await sb.functions.invoke('manage-team', {
+    body: { action: 'create', email, name }
+  })
+  if (error) throw new Error(error.message)
+  if (data?.error) throw new Error(data.error)
+  return data as { tempPassword: string; email: string }
+}
+
+/** Admin remove um membro do time (apaga a conta de autenticação). */
+export async function deleteMember(userId: string): Promise<void> {
+  const sb = getSupabase()
+  const { data, error } = await sb.functions.invoke('manage-team', {
+    body: { action: 'delete', userId }
+  })
+  if (error) throw new Error(error.message)
+  if (data?.error) throw new Error(data.error)
+}

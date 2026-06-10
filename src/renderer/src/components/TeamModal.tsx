@@ -7,12 +7,59 @@ interface Props {
   onClose: () => void
 }
 
+const DOWNLOAD_URL = 'https://github.com/cbjuniiior/inside-cofre-acessos/releases/latest'
+
+function welcomeMessage(email: string, password: string, fromName: string): string {
+  return `Olá! 👋 Você foi adicionado(a) ao *Inside Cofre de Acessos* — o app que a equipe usa pra acessar as contas dos clientes.
+
+📥 *Baixe e instale o app:*
+${DOWNLOAD_URL}
+(No Windows, baixe o arquivo que termina em *setup.exe*. Se aparecer aviso do Windows, clique em "Mais informações → Executar assim mesmo".)
+
+🔑 *Seu acesso:*
+E-mail: ${email}
+Senha temporária: ${password}
+
+➡️ *Primeiros passos:*
+1. Instale e abra o app
+2. Entre com o e-mail e a senha acima
+3. Troque sua senha em "Conta → Alterar senha"
+4. Me avise que eu libero seu acesso ao cofre (vou te enviar uma 2ª senha, a do cofre)
+
+Qualquer dúvida, é só chamar! — ${fromName}`
+}
+
+function vaultMessage(password: string, fromName: string): string {
+  return `Pronto! 🔐 Liberei seu acesso ao *cofre* do Inside Cofre de Acessos.
+
+🔑 *Senha do cofre (a 2ª senha):*
+${password}
+
+➡️ *No app:*
+1. Faça login normalmente (seu e-mail + senha)
+2. Quando pedir a "senha do cofre", use a senha acima
+3. Depois troque por uma senha sua em "Conta → Senha do cofre"
+
+Agora você já consegue abrir as contas dos clientes! — ${fromName}`
+}
+
 export default function TeamModal({ currentUser, onClose }: Props): JSX.Element {
   const [members, setMembers] = useState<Member[]>([])
   const [access, setAccess] = useState<Map<string, VaultAccess>>(new Map())
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [tempFor, setTempFor] = useState<{ name: string; password: string } | null>(null)
+  const [newEmail, setNewEmail] = useState('')
+  const [newName, setNewName] = useState('')
+  const [creating, setCreating] = useState(false)
+  const [loginTemp, setLoginTemp] = useState<{ email: string; password: string } | null>(null)
+  const [copied, setCopied] = useState('')
+
+  function copy(text: string, tag: string): void {
+    void navigator.clipboard?.writeText(text)
+    setCopied(tag)
+    window.setTimeout(() => setCopied(''), 2000)
+  }
 
   async function load(): Promise<void> {
     setLoading(true)
@@ -65,15 +112,101 @@ export default function TeamModal({ currentUser, onClose }: Props): JSX.Element 
     }
   }
 
+  async function addMember(): Promise<void> {
+    setCreating(true)
+    setError('')
+    try {
+      const r = await call(window.api.members.create(newEmail.trim(), newName.trim()))
+      setLoginTemp({ email: r.email, password: r.tempPassword })
+      setNewEmail('')
+      setNewName('')
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Erro ao adicionar membro')
+    } finally {
+      setCreating(false)
+    }
+  }
+
+  async function removeMember(m: Member): Promise<void> {
+    if (!confirm(`Remover "${m.name || m.email}" do time? A conta de login será apagada.`)) return
+    try {
+      await call(window.api.members.remove(m.id))
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Erro ao remover')
+    }
+  }
+
   return (
     <div className="fixed inset-0 z-10 flex items-center justify-center bg-black/60 p-6 backdrop-blur-sm">
-      <div className="card flex max-h-full w-full max-w-2xl flex-col p-6 shadow-2xl">
-        <h2 className="mb-1 text-lg font-semibold text-white">Equipe</h2>
+      <div className="card animate-scale-in flex max-h-full w-full max-w-2xl flex-col p-6">
+        <h2 className="mb-1 font-display text-xl font-bold text-white">Equipe</h2>
         <p className="mb-4 text-sm text-slate-400">
           Admins gerenciam perfis, papéis e o acesso ao cofre.
         </p>
 
         {error && <p className="mb-3 text-sm text-red-400">{error}</p>}
+
+        {/* Adicionar membro */}
+        <div className="mb-4 rounded-xl border border-white/10 bg-ink-850 p-3">
+          <p className="mb-2 text-sm font-medium text-slate-300">Adicionar membro</p>
+          <div className="flex flex-wrap gap-2">
+            <input
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              placeholder="Nome"
+              className="field min-w-[120px] flex-1"
+            />
+            <input
+              value={newEmail}
+              onChange={(e) => setNewEmail(e.target.value)}
+              type="email"
+              placeholder="e-mail"
+              className="field min-w-[160px] flex-1"
+            />
+            <button
+              onClick={addMember}
+              disabled={creating || !newEmail.trim()}
+              className="btn-primary"
+            >
+              {creating ? 'Criando…' : 'Adicionar'}
+            </button>
+          </div>
+          {loginTemp && (
+            <div className="mt-3 rounded-lg border border-brand-500/40 bg-brand-500/10 p-3 text-sm text-slate-200">
+              <p className="mb-2 font-medium text-white">✅ Membro criado</p>
+              <div className="space-y-1 text-[13px]">
+                <p>
+                  E-mail: <b>{loginTemp.email}</b>
+                </p>
+                <p className="flex items-center gap-2">
+                  Senha temporária:
+                  <code className="rounded bg-ink-950 px-2 py-0.5 font-bold text-brand-300">
+                    {loginTemp.password}
+                  </code>
+                  <button
+                    onClick={() => copy(loginTemp.password, 'pw')}
+                    className="text-xs text-slate-400 hover:text-slate-200"
+                  >
+                    {copied === 'pw' ? 'copiado ✓' : 'copiar senha'}
+                  </button>
+                </p>
+              </div>
+              <button
+                onClick={() =>
+                  copy(welcomeMessage(loginTemp.email, loginTemp.password, currentUser.name), 'msg')
+                }
+                className="mt-3 w-full rounded-lg bg-brand-500 px-3 py-2 text-sm font-semibold text-white hover:bg-brand-600"
+              >
+                {copied === 'msg' ? 'Mensagem copiada ✓' : '📋 Copiar mensagem pro WhatsApp'}
+              </button>
+              <p className="mt-2 text-[11px] text-slate-400">
+                Cole no WhatsApp do colaborador. Depois, conceda o acesso ao cofre abaixo.
+              </p>
+            </div>
+          )}
+        </div>
 
         {tempFor && (
           <div className="mb-4 rounded-lg border border-brand-500/40 bg-brand-500/10 p-3">
@@ -84,11 +217,8 @@ export default function TeamModal({ currentUser, onClose }: Props): JSX.Element 
               <code className="rounded bg-ink-950 px-3 py-1.5 text-sm font-bold tracking-wide text-brand-300">
                 {tempFor.password}
               </code>
-              <button
-                onClick={() => navigator.clipboard?.writeText(tempFor.password)}
-                className="btn-ghost py-1.5"
-              >
-                Copiar
+              <button onClick={() => copy(tempFor.password, 'vpw')} className="btn-ghost py-1.5">
+                {copied === 'vpw' ? 'copiado ✓' : 'copiar senha'}
               </button>
               <button
                 onClick={() => setTempFor(null)}
@@ -97,6 +227,12 @@ export default function TeamModal({ currentUser, onClose }: Props): JSX.Element 
                 ok, já anotei
               </button>
             </div>
+            <button
+              onClick={() => copy(vaultMessage(tempFor.password, currentUser.name), 'vmsg')}
+              className="mt-3 w-full rounded-lg bg-brand-500 px-3 py-2 text-sm font-semibold text-white hover:bg-brand-600"
+            >
+              {copied === 'vmsg' ? 'Mensagem copiada ✓' : '📋 Copiar mensagem pro WhatsApp'}
+            </button>
             <p className="mt-2 text-[11px] text-slate-400">
               Repasse com segurança. No primeiro acesso, peça para a pessoa trocar em “Conta → Senha do cofre”.
             </p>
@@ -179,6 +315,16 @@ export default function TeamModal({ currentUser, onClose }: Props): JSX.Element 
                           </button>
                         ))}
                       </div>
+
+                      {!isSelf && (
+                        <button
+                          onClick={() => removeMember(m)}
+                          className="rounded-lg border border-white/10 px-2.5 py-1 text-xs font-medium text-red-400 hover:bg-red-500/10"
+                          title="Remover do time"
+                        >
+                          Remover
+                        </button>
+                      )}
                     </div>
                   </li>
                 )

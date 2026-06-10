@@ -6,6 +6,9 @@ import { initAutoUpdate } from './updater'
 
 let mainWindow: BrowserWindow | null = null
 
+// Em dev, usa o PNG do ícone na barra de tarefas; empacotado, o ícone vem do .exe.
+export const DEV_ICON = app.isPackaged ? undefined : join(__dirname, '../../build/icon.png')
+
 function createMainWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1100,
@@ -15,6 +18,7 @@ function createMainWindow(): void {
     show: false,
     autoHideMenuBar: true,
     title: 'Inside Cofre de Acessos',
+    icon: DEV_ICON,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false,

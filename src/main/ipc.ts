@@ -49,6 +49,8 @@ export function registerIpc(): void {
 
   ipcMain.handle('members:list', wrap(() => members.listMembers()))
   ipcMain.handle('members:setRole', wrap((id: string, role: Role) => members.setMemberRole(id, role)))
+  ipcMain.handle('members:create', wrap((email: string, name: string) => members.createMember(email, name)))
+  ipcMain.handle('members:remove', wrap((userId: string) => members.deleteMember(userId)))
 
   ipcMain.handle('proxies:list', wrap(() => proxies.listProxies()))
   ipcMain.handle('proxies:create', wrap((input: ProxyInput) => proxies.createProxy(input)))

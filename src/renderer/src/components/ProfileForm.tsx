@@ -79,8 +79,8 @@ export default function ProfileForm({ profile, onClose, onSaved }: Props): JSX.E
 
   return (
     <div className="fixed inset-0 z-10 flex items-center justify-center bg-black/60 p-6 backdrop-blur-sm">
-      <form onSubmit={submit} className="card max-h-full w-full max-w-md overflow-auto p-6 shadow-2xl">
-        <h2 className="mb-5 text-lg font-semibold text-white">
+      <form onSubmit={submit} className="card animate-scale-in max-h-full w-full max-w-md overflow-auto p-6">
+        <h2 className="mb-5 font-display text-xl font-bold text-white">
           {editing ? 'Editar perfil' : 'Novo perfil'}
         </h2>
 

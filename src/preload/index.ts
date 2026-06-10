@@ -28,7 +28,7 @@ interface BrowserState {
 }
 
 interface BrowserEvent {
-  type: 'tabCreated' | 'tabUpdated' | 'tabClosed' | 'activeChanged'
+  type: 'tabCreated' | 'tabUpdated' | 'tabClosed' | 'activeChanged' | 'focusAddress'
   data: unknown
 }
 
@@ -66,7 +66,10 @@ const api = {
   },
   members: {
     list: () => invoke<Member[]>('members:list'),
-    setRole: (id: string, role: Role) => invoke<void>('members:setRole', id, role)
+    setRole: (id: string, role: Role) => invoke<void>('members:setRole', id, role),
+    create: (email: string, name: string) =>
+      invoke<{ tempPassword: string; email: string }>('members:create', email, name),
+    remove: (userId: string) => invoke<void>('members:remove', userId)
   },
   proxies: {
     list: () => invoke<Proxy[]>('proxies:list'),
@@ -86,6 +89,7 @@ const api = {
     forward: (id: number) => ipcRenderer.invoke('browser:forward', id),
     reload: (id: number) => ipcRenderer.invoke('browser:reload', id),
     setChromeHeight: (px: number) => ipcRenderer.invoke('browser:setChromeHeight', px),
+    saveSession: () => ipcRenderer.invoke('browser:saveSession') as Promise<'saved' | 'unchanged'>,
     listBookmarks: () => ipcRenderer.invoke('browser:listBookmarks') as Promise<Bookmark[]>,
     addBookmark: (title: string, url: string) =>
       ipcRenderer.invoke('browser:addBookmark', title, url) as Promise<Bookmark>,

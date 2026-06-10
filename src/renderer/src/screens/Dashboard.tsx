@@ -81,8 +81,8 @@ export default function Dashboard({ user, onSignOut, onLock, onAccountChanged }:
     localStorage.setItem('cofre_view', v)
   }
 
-  const load = useCallback(async () => {
-    setLoading(true)
+  const load = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true)
     setError('')
     try {
       const [p, a] = await Promise.all([
@@ -94,18 +94,30 @@ export default function Dashboard({ user, onSignOut, onLock, onAccountChanged }:
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Erro ao carregar')
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }, [])
 
   useEffect(() => {
     void load()
+    const onFocus = (): void => void load(true)
+    window.addEventListener('focus', onFocus)
+    const timer = window.setInterval(() => void load(true), 15000)
+    return () => {
+      window.removeEventListener('focus', onFocus)
+      window.clearInterval(timer)
+    }
   }, [load])
+
+  function inUse(p: Profile): boolean {
+    if (!p.in_use_by_email || !p.in_use_at) return false
+    return Date.now() - new Date(p.in_use_at).getTime() < 10 * 60 * 1000
+  }
 
   async function open(p: Profile): Promise<void> {
     try {
       await call(window.api.profiles.open(p.id))
-      await load()
+      await load(true)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Erro ao abrir o perfil')
     }
@@ -149,7 +161,7 @@ export default function Dashboard({ user, onSignOut, onLock, onAccountChanged }:
       <div className="flex shrink-0 gap-2">
         <button
           onClick={() => open(p)}
-          className="rounded-lg bg-brand-500 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-brand-600"
+          className="rounded-lg bg-brand-500 px-3.5 py-1.5 text-xs font-semibold text-white shadow-[0_6px_18px_-10px_rgba(229,80,165,0.9)] transition hover:bg-brand-400 active:scale-95"
         >
           Abrir
         </button>
@@ -160,13 +172,13 @@ export default function Dashboard({ user, onSignOut, onLock, onAccountChanged }:
                 setEditing(p)
                 setShowForm(true)
               }}
-              className="rounded-lg border border-white/10 px-3 py-1.5 text-xs font-medium text-slate-300 hover:bg-white/5"
+              className="rounded-lg border border-white/[0.08] px-3 py-1.5 text-xs font-medium text-slate-300 transition hover:bg-white/5"
             >
               Editar
             </button>
             <button
               onClick={() => remove(p)}
-              className="rounded-lg border border-white/10 px-3 py-1.5 text-xs font-medium text-red-400 hover:bg-red-500/10"
+              className="rounded-lg border border-white/[0.08] px-3 py-1.5 text-xs font-medium text-red-400 transition hover:bg-red-500/10"
             >
               Excluir
             </button>
@@ -183,17 +195,69 @@ export default function Dashboard({ user, onSignOut, onLock, onAccountChanged }:
   ]
 
   return (
-    <div className="flex h-full flex-col bg-ink-900">
-      <header className="flex items-center justify-between border-b border-white/5 px-6 py-4">
-        <div className="flex items-center gap-3">
+    <div className="flex h-full">
+      {/* ===== Sidebar ===== */}
+      <aside className="flex w-60 shrink-0 flex-col border-r border-white/[0.06] bg-ink-900/30 p-4">
+        <div className="px-2 pb-5 pt-2">
           <img src={logo} alt="Inside" className="h-6 w-auto" />
-          <span className="h-7 w-px bg-white/10" />
-          <div>
-            <h1 className="text-sm font-semibold text-white">Cofre de Acessos</h1>
-            <p className="text-xs text-slate-400">{profiles.length} perfis</p>
+        </div>
+
+        <nav className="space-y-1">
+          <div className="nav-item nav-active cursor-default">
+            <span className="text-base">🗂️</span>
+            Perfis
+            <span className="ml-auto font-mono text-xs text-slate-500">{profiles.length}</span>
+          </div>
+          {isAdmin && (
+            <button onClick={() => setShowProxies(true)} className="nav-item">
+              <span className="text-base">🛰️</span>
+              Proxies
+            </button>
+          )}
+          {isAdmin && (
+            <button onClick={() => setShowTeam(true)} className="nav-item">
+              <span className="text-base">👥</span>
+              Equipe
+            </button>
+          )}
+        </nav>
+
+        <div className="mt-auto space-y-2">
+          <button
+            onClick={() => setShowAccount(true)}
+            className="flex w-full items-center gap-3 rounded-xl border border-white/[0.06] bg-white/[0.02] p-2.5 text-left transition hover:bg-white/[0.05]"
+          >
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-brand-400 to-brand-600 text-sm font-bold text-white">
+              {initial}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-sm font-medium text-white">{displayName}</span>
+              <span className="block truncate text-[11px] text-slate-500">
+                {isAdmin ? 'Administrador' : 'Membro'}
+              </span>
+            </span>
+          </button>
+          <div className="flex gap-2">
+            <button onClick={lock} className="btn-ghost flex-1 py-2 text-xs">
+              Travar
+            </button>
+            <button onClick={signOut} className="btn-ghost flex-1 py-2 text-xs">
+              Sair
+            </button>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+      </aside>
+
+      {/* ===== Conteúdo ===== */}
+      <main className="flex min-h-0 flex-1 flex-col">
+        <header className="flex items-center justify-between gap-4 border-b border-white/[0.06] px-7 py-5">
+          <div>
+            <h1 className="font-display text-xl font-bold text-white">Perfis</h1>
+            <p className="text-xs text-slate-500">
+              <span className="font-mono text-slate-400">{profiles.length}</span> contas ·{' '}
+              <span className="font-mono text-slate-400">{filtered.length}</span> exibidas
+            </p>
+          </div>
           {isAdmin && (
             <button
               onClick={() => {
@@ -205,230 +269,223 @@ export default function Dashboard({ user, onSignOut, onLock, onAccountChanged }:
               + Novo perfil
             </button>
           )}
-          {isAdmin && (
-            <button onClick={() => setShowProxies(true)} className="btn-ghost">
-              Proxies
-            </button>
-          )}
-          {isAdmin && (
-            <button onClick={() => setShowTeam(true)} className="btn-ghost">
-              Equipe
-            </button>
-          )}
-          <button
-            onClick={() => setShowAccount(true)}
-            className="flex items-center gap-2 rounded-lg border border-white/10 py-1.5 pl-1.5 pr-3 text-sm font-medium text-slate-300 transition hover:bg-white/5"
-            title="Minha conta"
-          >
-            <span className="flex h-7 w-7 items-center justify-center rounded-md bg-brand-500 text-xs font-bold text-white">
-              {initial}
-            </span>
-            <span className="max-w-[140px] truncate">{displayName}</span>
-          </button>
-          <button onClick={lock} className="btn-ghost">
-            Travar
-          </button>
-          <button onClick={signOut} className="btn-ghost">
-            Sair
-          </button>
-        </div>
-      </header>
+        </header>
 
-      <div className="flex min-h-0 flex-1">
-        <main className="flex min-h-0 flex-1 flex-col p-6">
-          {/* Barra de ferramentas: busca + filtros de squad + alternância de view */}
-          <div className="mb-5 flex flex-wrap items-center gap-3">
+        {/* Toolbar */}
+        <div className="flex flex-wrap items-center gap-3 px-7 pt-5">
+          <div className="relative min-w-[220px] flex-1">
+            <svg
+              className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
+              <circle cx="11" cy="11" r="7" />
+              <path d="m21 21-4.3-4.3" />
+            </svg>
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Buscar por cliente, serviço ou tag…"
-              className="field min-w-[220px] flex-1"
+              className="field pl-10"
             />
-
-            <div className="flex items-center gap-1 rounded-lg border border-white/10 bg-ink-800 p-1">
-              {squadFilters.map((f) => (
-                <button
-                  key={f.value}
-                  onClick={() => setSquadFilter(f.value)}
-                  className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition ${
-                    squadFilter === f.value
-                      ? 'bg-white/10 text-white'
-                      : 'text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  {f.dot && <span className={`h-1.5 w-1.5 rounded-full ${f.dot}`} />}
-                  {f.label}
-                </button>
-              ))}
-            </div>
-
-            <div className="flex items-center gap-1 rounded-lg border border-white/10 bg-ink-800 p-1">
-              <button
-                onClick={() => changeView('list')}
-                className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
-                  view === 'list' ? 'bg-white/10 text-white' : 'text-slate-400 hover:text-slate-200'
-                }`}
-                title="Lista"
-              >
-                ☰ Lista
-              </button>
-              <button
-                onClick={() => changeView('cards')}
-                className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
-                  view === 'cards' ? 'bg-white/10 text-white' : 'text-slate-400 hover:text-slate-200'
-                }`}
-                title="Cards"
-              >
-                ▦ Cards
-              </button>
-            </div>
           </div>
 
-          {error && <p className="mb-3 text-sm text-red-400">{error}</p>}
+          <div className="flex items-center gap-1 rounded-xl border border-white/[0.07] bg-ink-850 p-1">
+            {squadFilters.map((f) => (
+              <button
+                key={f.value}
+                onClick={() => setSquadFilter(f.value)}
+                className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition ${
+                  squadFilter === f.value ? 'bg-white/10 text-white' : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                {f.dot && <span className={`h-1.5 w-1.5 rounded-full ${f.dot}`} />}
+                {f.label}
+              </button>
+            ))}
+          </div>
 
-          <div className="min-h-0 flex-1 overflow-auto">
-            {loading ? (
-              <p className="text-sm text-slate-400">Carregando perfis…</p>
-            ) : filtered.length === 0 ? (
-              <div className="flex h-full flex-col items-center justify-center text-center">
-                <div className="mb-3 text-4xl opacity-40">🗂️</div>
-                <p className="text-sm text-slate-400">Nenhum perfil aqui.</p>
-              </div>
-            ) : view === 'list' ? (
-              <ul className="space-y-2">
-                {filtered.map((p) => {
-                  const sq = p.squad ? SQUAD[p.squad] : null
-                  return (
-                    <li
-                      key={p.id}
-                      className={`card flex items-center gap-3 border-l-2 p-3 transition hover:bg-white/[0.03] ${
-                        sq ? sq.border : 'border-l-white/10'
-                      }`}
-                    >
-                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-ink-750 text-base">
-                        {SERVICE_ICON[p.service]}
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2">
-                          <p className="truncate font-medium text-white">{p.client_name}</p>
-                          {p.squad && <SquadBadge squad={p.squad} />}
-                        </div>
-                        <p className="truncate text-xs text-slate-500">
-                          {SERVICE_LABEL[p.service]} · {p.url}
-                        </p>
-                      </div>
-                      {p.in_use_by_email && (
-                        <span className="hidden items-center gap-1.5 text-[11px] font-medium text-amber-400 md:flex">
-                          <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
-                          {p.in_use_by_name || p.in_use_by_email}
-                        </span>
-                      )}
-                      {p.has_session && (
-                        <span className="hidden rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-medium text-emerald-400 sm:inline">
-                          sessão
-                        </span>
-                      )}
-                      {p.proxy_id && (
-                        <span className="hidden rounded-full bg-sky-500/15 px-2 py-0.5 text-[10px] font-medium text-sky-400 sm:inline">
-                          proxy
-                        </span>
-                      )}
-                      <Actions p={p} />
-                    </li>
-                  )
-                })}
-              </ul>
-            ) : (
-              <ul className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-                {filtered.map((p) => {
-                  const sq = p.squad ? SQUAD[p.squad] : null
-                  return (
-                    <li
-                      key={p.id}
-                      className={`card group border-l-2 p-4 transition hover:border-brand-500/40 hover:shadow-glow ${
-                        sq ? sq.border : 'border-l-white/10'
-                      }`}
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="flex min-w-0 items-center gap-3">
-                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-ink-750 text-lg">
-                            {SERVICE_ICON[p.service]}
-                          </div>
-                          <div className="min-w-0">
-                            <p className="truncate font-medium text-white">{p.client_name}</p>
-                            <p className="truncate text-xs text-slate-500">
-                              {SERVICE_LABEL[p.service]} · {p.url}
-                            </p>
-                          </div>
-                        </div>
-                        <div className="flex shrink-0 flex-col items-end gap-1">
-                          {p.has_session && (
-                            <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-medium text-emerald-400">
-                              sessão
-                            </span>
-                          )}
-                          {p.proxy_id && (
-                            <span className="rounded-full bg-sky-500/15 px-2 py-0.5 text-[10px] font-medium text-sky-400">
-                              proxy
-                            </span>
-                          )}
-                        </div>
-                      </div>
+          <div className="flex items-center gap-1 rounded-xl border border-white/[0.07] bg-ink-850 p-1">
+            <button
+              onClick={() => changeView('list')}
+              className={`rounded-lg px-2.5 py-1.5 text-xs font-medium transition ${
+                view === 'list' ? 'bg-white/10 text-white' : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              ☰ Lista
+            </button>
+            <button
+              onClick={() => changeView('cards')}
+              className={`rounded-lg px-2.5 py-1.5 text-xs font-medium transition ${
+                view === 'cards' ? 'bg-white/10 text-white' : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              ▦ Cards
+            </button>
+          </div>
+        </div>
 
-                      <div className="mt-3 flex flex-wrap items-center gap-1">
+        {error && <p className="mx-7 mt-3 text-sm text-red-400">{error}</p>}
+
+        <div className="min-h-0 flex-1 overflow-auto px-7 pb-7 pt-5">
+          {loading ? (
+            <p className="text-sm text-slate-400">Carregando perfis…</p>
+          ) : filtered.length === 0 ? (
+            <div className="flex h-full flex-col items-center justify-center text-center">
+              <div className="mb-3 text-5xl opacity-30">🗂️</div>
+              <p className="text-sm text-slate-400">Nenhum perfil aqui.</p>
+            </div>
+          ) : view === 'list' ? (
+            <ul className="space-y-2">
+              {filtered.map((p, i) => {
+                const sq = p.squad ? SQUAD[p.squad] : null
+                return (
+                  <li
+                    key={p.id}
+                    style={{ animationDelay: `${Math.min(i, 12) * 28}ms` }}
+                    className={`card animate-fade-up flex items-center gap-3.5 border-l-2 p-3.5 transition hover:border-white/[0.14] hover:bg-white/[0.02] ${
+                      sq ? sq.border : 'border-l-white/[0.1]'
+                    }`}
+                  >
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white/[0.04] text-lg">
+                      {SERVICE_ICON[p.service]}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <p className="truncate font-medium text-white">{p.client_name}</p>
                         {p.squad && <SquadBadge squad={p.squad} />}
-                        {p.tags.map((t) => (
-                          <span
-                            key={t}
-                            className="rounded bg-white/5 px-1.5 py-0.5 text-[11px] text-slate-400"
-                          >
-                            {t}
-                          </span>
-                        ))}
                       </div>
-
-                      {p.in_use_by_email && (
-                        <p className="mt-3 flex items-center gap-1.5 text-[11px] font-medium text-amber-400">
-                          <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
-                          em uso por {p.in_use_by_name || p.in_use_by_email}
-                        </p>
-                      )}
-
-                      <div className="mt-4">
-                        <Actions p={p} />
-                      </div>
-                    </li>
-                  )
-                })}
-              </ul>
-            )}
-          </div>
-        </main>
-
-        <aside className="hidden w-72 shrink-0 overflow-auto border-l border-white/5 p-5 lg:block">
-          <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
-            Atividade recente
-          </h2>
-          {audit.length === 0 ? (
-            <p className="text-xs text-slate-600">Sem registros.</p>
+                      <p className="truncate font-mono text-xs text-slate-500">
+                        {SERVICE_LABEL[p.service]} · {p.url}
+                      </p>
+                    </div>
+                    {inUse(p) && (
+                      <span className="hidden items-center gap-1.5 text-[11px] font-medium text-amber-400 md:flex">
+                        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-400" />
+                        {p.in_use_by_name || p.in_use_by_email}
+                      </span>
+                    )}
+                    {p.needs_login && (
+                      <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-400">
+                        relogar
+                      </span>
+                    )}
+                    {p.has_session && (
+                      <span className="hidden rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-medium text-emerald-400 sm:inline">
+                        sessão
+                      </span>
+                    )}
+                    {p.proxy_id && (
+                      <span className="hidden rounded-full bg-sky-500/15 px-2 py-0.5 text-[10px] font-medium text-sky-400 sm:inline">
+                        proxy
+                      </span>
+                    )}
+                    <Actions p={p} />
+                  </li>
+                )
+              })}
+            </ul>
           ) : (
-            <ul className="space-y-3">
-              {audit.slice(0, 30).map((a) => (
-                <li key={a.id} className="text-xs text-slate-400">
-                  <span className="font-medium text-slate-200">
-                    {a.user_name || a.user_email || 'alguém'}
-                  </span>{' '}
-                  {a.action}
-                  {a.profile_name ? <span className="text-slate-500"> · {a.profile_name}</span> : ''}
-                  <span className="mt-0.5 block text-[10px] text-slate-600">
-                    {new Date(a.created_at).toLocaleString('pt-BR')}
-                  </span>
-                </li>
-              ))}
+            <ul className="grid grid-cols-1 gap-3.5 md:grid-cols-2 2xl:grid-cols-3">
+              {filtered.map((p, i) => {
+                const sq = p.squad ? SQUAD[p.squad] : null
+                return (
+                  <li
+                    key={p.id}
+                    style={{ animationDelay: `${Math.min(i, 12) * 28}ms` }}
+                    className={`card animate-fade-up group border-l-2 p-4 transition hover:-translate-y-0.5 hover:border-brand-500/40 hover:shadow-glow ${
+                      sq ? sq.border : 'border-l-white/[0.1]'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex min-w-0 items-center gap-3">
+                        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white/[0.04] text-xl">
+                          {SERVICE_ICON[p.service]}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="truncate font-medium text-white">{p.client_name}</p>
+                          <p className="truncate font-mono text-xs text-slate-500">
+                            {SERVICE_LABEL[p.service]}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex shrink-0 flex-col items-end gap-1">
+                        {p.needs_login && (
+                          <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-400">
+                            relogar
+                          </span>
+                        )}
+                        {p.has_session && (
+                          <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-medium text-emerald-400">
+                            sessão
+                          </span>
+                        )}
+                        {p.proxy_id && (
+                          <span className="rounded-full bg-sky-500/15 px-2 py-0.5 text-[10px] font-medium text-sky-400">
+                            proxy
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="mt-3 flex flex-wrap items-center gap-1">
+                      {p.squad && <SquadBadge squad={p.squad} />}
+                      {p.tags.map((t) => (
+                        <span key={t} className="rounded bg-white/5 px-1.5 py-0.5 text-[11px] text-slate-400">
+                          {t}
+                        </span>
+                      ))}
+                    </div>
+
+                    {inUse(p) && (
+                      <p className="mt-3 flex items-center gap-1.5 text-[11px] font-medium text-amber-400">
+                        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-400" />
+                        em uso por {p.in_use_by_name || p.in_use_by_email}
+                      </p>
+                    )}
+
+                    <div className="mt-4">
+                      <Actions p={p} />
+                    </div>
+                  </li>
+                )
+              })}
             </ul>
           )}
-        </aside>
-      </div>
+        </div>
+      </main>
+
+      {/* ===== Atividade ===== */}
+      <aside className="hidden w-72 shrink-0 flex-col overflow-auto border-l border-white/[0.06] p-5 xl:flex">
+        <h2 className="mb-4 text-[11px] font-semibold uppercase tracking-widest text-slate-500">
+          Atividade recente
+        </h2>
+        {audit.length === 0 ? (
+          <p className="text-xs text-slate-600">Sem registros.</p>
+        ) : (
+          <ul className="space-y-3.5">
+            {audit.slice(0, 30).map((a) => (
+              <li key={a.id} className="flex gap-3 text-xs">
+                <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-brand-500/60" />
+                <div className="min-w-0">
+                  <p className="text-slate-300">
+                    <span className="font-medium text-white">
+                      {a.user_name || a.user_email || 'alguém'}
+                    </span>{' '}
+                    {a.action}
+                    {a.profile_name ? <span className="text-slate-500"> · {a.profile_name}</span> : ''}
+                  </p>
+                  <p className="mt-0.5 font-mono text-[10px] text-slate-600">
+                    {new Date(a.created_at).toLocaleString('pt-BR')}
+                  </p>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </aside>
 
       {showForm && (
         <ProfileForm
@@ -440,13 +497,10 @@ export default function Dashboard({ user, onSignOut, onLock, onAccountChanged }:
           }}
         />
       )}
-
       {showAccount && (
         <AccountModal user={user} onClose={() => setShowAccount(false)} onUpdated={onAccountChanged} />
       )}
-
       {showTeam && <TeamModal currentUser={user} onClose={() => setShowTeam(false)} />}
-
       {showProxies && <ProxyModal onClose={() => setShowProxies(false)} />}
     </div>
   )

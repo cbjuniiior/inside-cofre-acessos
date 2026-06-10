@@ -30,6 +30,7 @@ export interface Profile {
   url: string
   tags: string[]
   proxy_id: string | null
+  needs_login: boolean
   in_use_by: string | null
   in_use_by_email: string | null
   in_use_by_name: string | null
@@ -95,6 +96,7 @@ export interface BrowserProfileInfo {
   id: string
   client_name: string
   service: ProfileService
+  squad: Squad | null
 }
 
 export interface VaultStatus {

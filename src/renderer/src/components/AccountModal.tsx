@@ -85,8 +85,8 @@ export default function AccountModal({ user, onClose, onUpdated }: Props): JSX.E
 
   return (
     <div className="fixed inset-0 z-10 flex items-center justify-center bg-black/60 p-6 backdrop-blur-sm">
-      <div className="card w-full max-w-md p-6 shadow-2xl">
-        <h2 className="mb-1 text-lg font-semibold text-white">Minha conta</h2>
+      <div className="card animate-scale-in w-full max-w-md p-6">
+        <h2 className="mb-1 font-display text-xl font-bold text-white">Minha conta</h2>
         <p className="mb-5 text-sm text-slate-400">{user.email}</p>
 
         <label className="mb-1 block text-sm font-medium text-slate-300">Seu nome</label>
