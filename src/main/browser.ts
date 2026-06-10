@@ -1,9 +1,10 @@
 import { app, BrowserWindow, WebContentsView, session, ipcMain, type Session } from 'electron'
+import { writeFileSync } from 'fs'
 import { join } from 'path'
 import { getSupabase } from './supabase'
 import { getCurrentUser } from './auth'
 import { logAudit } from './audit'
-import { pullSession, pushSession, type LocalStorageMap } from './session-sync'
+import { pullSession, pushSession, type LocalStorageMap, type IndexedDbMap } from './session-sync'
 import { resolveProfileProxy } from './proxies'
 import type { Bookmark, TabState } from '../shared/types'
 
@@ -36,6 +37,85 @@ const LOCK_FRESH_MS = 5 * 60 * 1000
 export function chromeUserAgent(): string {
   const base = app.userAgentFallback || ''
   return base.replace(/ Electron\/[^ ]+/, '')
+}
+
+/**
+ * Script (roda na página via executeJavaScript) que exporta TODOS os bancos
+ * IndexedDB da origem atual como JSON: `{ [db]: { version, stores: { [store]:
+ * { keyPath, autoIncrement, entries: [{ key?, value }] } } } }`. As duas
+ * requisições (getAll/getAllKeys) são emitidas antes do await para a transação
+ * não auto-commitar no meio. Há um teto de tamanho para não sincronizar caches
+ * gigantes. Tokens de auth (ex.: localforage `keyvaluepairs`) são pequenos.
+ */
+const IDB_DUMP_SCRIPT = `(async () => {
+  const CAP = 3000000; let total = 0; const out = {};
+  const reqP = (r) => new Promise((res) => { r.onsuccess = () => res(r.result); r.onerror = () => res(undefined); });
+  try {
+    const dbs = indexedDB.databases ? await indexedDB.databases() : [];
+    for (const info of dbs) {
+      const name = info.name; if (!name) continue;
+      const db = await new Promise((res) => { const r = indexedDB.open(name); r.onsuccess = () => res(r.result); r.onerror = () => res(null); r.onblocked = () => res(null); });
+      if (!db) continue;
+      const stores = {};
+      for (const sName of Array.from(db.objectStoreNames)) {
+        try {
+          const os = db.transaction(sName, 'readonly').objectStore(sName);
+          const keyPath = os.keyPath; const autoIncrement = !!os.autoIncrement;
+          const gv = os.getAll(); const gk = os.getAllKeys();
+          const values = (await reqP(gv)) || []; const keys = (await reqP(gk)) || [];
+          const entries = [];
+          for (let i = 0; i < values.length; i++) {
+            let j; try { j = JSON.stringify(values[i]); } catch (e) { continue; }
+            if (j === undefined) continue;
+            total += j.length; if (total > CAP) break;
+            const e = { value: values[i] };
+            if (keyPath == null) e.key = keys[i];
+            entries.push(e);
+          }
+          stores[sName] = { keyPath: keyPath == null ? null : keyPath, autoIncrement, entries };
+        } catch (e) { /* pula store problemático */ }
+      }
+      out[name] = { version: db.version, stores };
+      db.close();
+      if (total > CAP) break;
+    }
+  } catch (e) { /* origem sem IndexedDB */ }
+  return JSON.stringify(out);
+})()`
+
+/**
+ * Monta o script de restauração (localStorage + IndexedDB) para uma origem.
+ * Cria os bancos/stores se não existirem (com o mesmo keyPath/autoIncrement) e
+ * grava as entradas. Retorna true se concluiu — o chamador recarrega a aba.
+ */
+function buildRestoreScript(ls: Record<string, string>, idb: IndexedDbMap[string]): string {
+  return `(async () => {
+    try {
+      const ls = ${JSON.stringify(ls)};
+      for (const k in ls) { try { localStorage.setItem(k, ls[k]); } catch (e) {} }
+    } catch (e) {}
+    try {
+      const idb = ${JSON.stringify(idb)};
+      for (const name of Object.keys(idb)) {
+        const dbData = idb[name];
+        const storeNames = Object.keys(dbData.stores || {});
+        const mkStores = (d, names) => { for (const s of names) { if (!d.objectStoreNames.contains(s)) { const sd = dbData.stores[s]; d.createObjectStore(s, { keyPath: sd.keyPath == null ? undefined : sd.keyPath, autoIncrement: !!sd.autoIncrement }); } } };
+        let db = await new Promise((res, rej) => { const r = indexedDB.open(name); r.onupgradeneeded = () => mkStores(r.result, storeNames); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); r.onblocked = () => rej(new Error('blocked')); });
+        const missing = storeNames.filter((s) => !db.objectStoreNames.contains(s));
+        if (missing.length) {
+          const v = db.version + 1; db.close();
+          db = await new Promise((res, rej) => { const r = indexedDB.open(name, v); r.onupgradeneeded = () => mkStores(r.result, missing); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); r.onblocked = () => rej(new Error('blocked')); });
+        }
+        for (const s of storeNames) {
+          const entries = (dbData.stores[s] && dbData.stores[s].entries) || [];
+          if (!entries.length) continue;
+          await new Promise((res) => { const tx = db.transaction(s, 'readwrite'); const os = tx.objectStore(s); for (const e of entries) { try { if ('key' in e) os.put(e.value, e.key); else os.put(e.value); } catch (err) {} } tx.oncomplete = () => res(); tx.onerror = () => res(); tx.onabort = () => res(); });
+        }
+        db.close();
+      }
+      return true;
+    } catch (e) { return false; }
+  })()`
 }
 
 // Mapas globais para o handler de autenticação de proxy (app.on('login')).
@@ -89,11 +169,13 @@ class BrowserShell {
   private needsLogin = false
   private saveTimer: ReturnType<typeof setInterval> | null = null
   private cookiePushTimer: ReturnType<typeof setTimeout> | null = null
-  // localStorage vindo do servidor a injetar nas abas (por origem) + controle.
+  // Estado vindo do servidor a injetar nas abas (por origem) + controle.
   private pendingLocalStorage: LocalStorageMap = {}
+  private pendingIndexedDb: IndexedDbMap = {}
   private restoredOrigins = new Set<string>()
-  // Último localStorage capturado (fallback quando as abas já foram destruídas).
+  // Último estado capturado (fallback quando as abas já foram destruídas).
   private lastLocalStorage: LocalStorageMap = {}
+  private lastIndexedDb: IndexedDbMap = {}
 
   // Push quase imediato quando cookies mudam: o Google rotaciona os tokens de
   // sessão (__Secure-*PSIDTS) a cada ~30 min e invalida tudo se outra máquina
@@ -129,8 +211,92 @@ class BrowserShell {
     await this.saveSession()
   }
 
-  setPendingLocalStorage(ls: LocalStorageMap): void {
+  setPendingState(ls: LocalStorageMap, idb: IndexedDbMap): void {
     this.pendingLocalStorage = ls
+    this.pendingIndexedDb = idb
+  }
+
+  /**
+   * DIAGNÓSTICO (Ctrl+Shift+D): despeja todos os tipos de storage da aba ativa
+   * (cookies, localStorage, sessionStorage, IndexedDB) num arquivo, para
+   * descobrir ONDE um site guarda o token de auth. Temporário/investigativo.
+   */
+  async dumpStorageDiagnostic(): Promise<void> {
+    const view = this.tabs.get(this.activeId)
+    if (!view || view.webContents.isDestroyed()) return
+    const wc = view.webContents
+
+    const script = `(async () => {
+      const out = { url: location.href, origin: location.origin, localStorage: {}, sessionStorage: {}, indexedDB: {} }
+      const dump = (store, target) => { try { for (const k of Object.keys(store)) { const v = store.getItem(k); target[k] = { len: (v||'').length, sample: (v||'').slice(0, 500) } } } catch (e) { target.__error = String(e) } }
+      dump(localStorage, out.localStorage)
+      dump(sessionStorage, out.sessionStorage)
+      try {
+        const dbs = indexedDB.databases ? await indexedDB.databases() : []
+        for (const info of dbs) {
+          const name = info.name; out.indexedDB[name] = {}
+          await new Promise((resolve) => {
+            const req = indexedDB.open(name)
+            req.onsuccess = () => {
+              const db = req.result; const stores = Array.from(db.objectStoreNames)
+              let pending = stores.length; if (!pending) { db.close(); return resolve() }
+              for (const s of stores) {
+                try {
+                  const os = db.transaction(s, 'readonly').objectStore(s)
+                  const gv = os.getAll(); const gk = os.getAllKeys()
+                  gv.onsuccess = () => { gk.onsuccess = () => {
+                    out.indexedDB[name][s] = (gv.result||[]).map((v,i) => { try { const j = JSON.stringify(v); return { key: gk.result[i], len: j.length, sample: j.slice(0, 800) } } catch { return { key: gk.result[i], unserializable: true } } })
+                    if (--pending === 0) { db.close(); resolve() }
+                  } }
+                  gv.onerror = () => { out.indexedDB[name][s] = { error: 'getAll' }; if (--pending===0){db.close();resolve()} }
+                } catch (e) { out.indexedDB[name][s] = { error: String(e) }; if (--pending===0){db.close();resolve()} }
+              }
+            }
+            req.onerror = () => { out.indexedDB[name] = { error: 'open' }; resolve() }
+            req.onblocked = () => resolve()
+          })
+        }
+      } catch (e) { out.indexedDBError = String(e) }
+      return JSON.stringify(out)
+    })()`
+
+    try {
+      const json = (await wc.executeJavaScript(script)) as string
+      const parsed = JSON.parse(json)
+      const cookies = await this.ses.cookies.get({})
+      const full = {
+        profile: this.profile.client_name,
+        capturedUrl: parsed.url,
+        cookies: cookies.map((c) => ({
+          domain: c.domain,
+          name: c.name,
+          valueLen: c.value.length,
+          session: c.session,
+          httpOnly: c.httpOnly,
+          secure: c.secure
+        })),
+        localStorage: parsed.localStorage,
+        sessionStorage: parsed.sessionStorage,
+        indexedDB: parsed.indexedDB,
+        indexedDBError: parsed.indexedDBError
+      }
+      const file = join(app.getPath('userData'), 'storage-diagnostic.json')
+      writeFileSync(file, JSON.stringify(full, null, 2))
+      this.emit('focusAddress', {}) // feedback visual mínimo
+      console.log('Diagnóstico de storage salvo em:', file)
+    } catch (e) {
+      console.error('Falha no diagnóstico de storage:', e)
+    }
+  }
+
+  /** Origem http(s) da aba, ou null se não navegável. */
+  private originOf(wc: Electron.WebContents): string | null {
+    try {
+      const u = new URL(wc.getURL())
+      return u.protocol === 'http:' || u.protocol === 'https:' ? u.origin : null
+    } catch {
+      return null
+    }
   }
 
   /** Lê o localStorage de cada aba aberta, agrupado por origem. */
@@ -139,14 +305,8 @@ class BrowserShell {
     for (const view of this.tabs.values()) {
       const wc = view.webContents
       if (wc.isDestroyed()) continue
-      let origin: string
-      try {
-        const u = new URL(wc.getURL())
-        if (u.protocol !== 'http:' && u.protocol !== 'https:') continue
-        origin = u.origin
-      } catch {
-        continue
-      }
+      const origin = this.originOf(wc)
+      if (!origin) continue
       try {
         const json = (await wc.executeJavaScript('JSON.stringify(window.localStorage)')) as string
         const entries = JSON.parse(json) as Record<string, string>
@@ -158,25 +318,41 @@ class BrowserShell {
     return map
   }
 
-  /**
-   * Injeta o localStorage do servidor na aba (uma vez por origem) e recarrega,
-   * para o SPA inicializar já autenticado. Sem isso, sites que guardam o token
-   * no localStorage (Kiwify etc.) abrem deslogados mesmo com os cookies certos.
-   */
-  private async restoreLocalStorageInto(wc: Electron.WebContents): Promise<void> {
-    if (wc.isDestroyed()) return
-    let origin: string
-    try {
-      origin = new URL(wc.getURL()).origin
-    } catch {
-      return
+  /** Lê todos os bancos IndexedDB de cada aba aberta, agrupado por origem. */
+  private async captureIndexedDb(): Promise<IndexedDbMap> {
+    const map: IndexedDbMap = {}
+    for (const view of this.tabs.values()) {
+      const wc = view.webContents
+      if (wc.isDestroyed()) continue
+      const origin = this.originOf(wc)
+      if (!origin) continue
+      try {
+        const json = (await wc.executeJavaScript(IDB_DUMP_SCRIPT)) as string
+        const dbs = JSON.parse(json) as IndexedDbMap[string]
+        if (dbs && Object.keys(dbs).length) map[origin] = dbs
+      } catch {
+        /* aba sem acesso ao IndexedDB — ignora */
+      }
     }
-    const data = this.pendingLocalStorage[origin]
-    if (!data || this.restoredOrigins.has(origin)) return
+    return map
+  }
+
+  /**
+   * Injeta localStorage + IndexedDB do servidor na aba (uma vez por origem) e
+   * recarrega, para o SPA inicializar já autenticado. Sem isso, sites que guardam
+   * o token no IndexedDB (Kiwify/localforage, apps Firebase) abrem deslogados.
+   */
+  private async restoreStateInto(wc: Electron.WebContents): Promise<void> {
+    if (wc.isDestroyed()) return
+    const origin = this.originOf(wc)
+    if (!origin || this.restoredOrigins.has(origin)) return
+    const ls = this.pendingLocalStorage[origin]
+    const idb = this.pendingIndexedDb[origin]
+    const hasLs = ls && Object.keys(ls).length > 0
+    const hasIdb = idb && Object.keys(idb).length > 0
+    if (!hasLs && !hasIdb) return
     this.restoredOrigins.add(origin)
-    const script = `(() => { try { const d = ${JSON.stringify(
-      data
-    )}; for (const k in d) localStorage.setItem(k, d[k]); return true } catch (e) { return false } })()`
+    const script = buildRestoreScript(ls ?? {}, idb ?? {})
     try {
       const ok = (await wc.executeJavaScript(script)) as boolean
       if (ok && !wc.isDestroyed()) wc.reload()
@@ -185,17 +361,20 @@ class BrowserShell {
     }
   }
 
-  /** Salva a sessão (cookies + localStorage) se algo mudou desde o baseline. */
+  /** Salva a sessão (cookies + localStorage + IndexedDB) se algo mudou. */
   async saveSession(): Promise<'saved' | 'unchanged'> {
     try {
       let ls = this.lastLocalStorage
+      let idb = this.lastIndexedDb
       try {
         ls = await this.captureLocalStorage()
+        idb = await this.captureIndexedDb()
         this.lastLocalStorage = ls
+        this.lastIndexedDb = idb
       } catch {
-        /* abas indisponíveis — usa o último localStorage capturado */
+        /* abas indisponíveis — usa o último estado capturado */
       }
-      const h = await pushSession(this.profile.id, this.ses, ls, this.baselineHash)
+      const h = await pushSession(this.profile.id, this.ses, ls, idb, this.baselineHash)
       if (h) {
         this.baselineHash = h
         return 'saved'
@@ -296,7 +475,7 @@ class BrowserShell {
         this.updateWindowTitle()
       }
     }
-    wc.on('dom-ready', () => void this.restoreLocalStorageInto(wc))
+    wc.on('dom-ready', () => void this.restoreStateInto(wc))
     wc.on('page-title-updated', update)
     wc.on('did-navigate', update)
     wc.on('did-navigate-in-page', update)
@@ -424,6 +603,12 @@ class BrowserShell {
       case 'l':
         this.emit('focusAddress', {})
         return true
+      case 'd':
+        if (input.shift) {
+          void this.dumpStorageDiagnostic()
+          return true
+        }
+        return false
       case 'tab':
         this.cycleTab(input.shift ? -1 : 1)
         return true
@@ -553,7 +738,11 @@ export async function openProfileBrowser(profileId: string, force = false): Prom
     await ses.setProxy({ mode: 'direct' })
   }
 
-  const { hash: baselineHash, localStorage: pendingLs } = await pullSession(profileId, ses)
+  const {
+    hash: baselineHash,
+    localStorage: pendingLs,
+    indexedDB: pendingIdb
+  } = await pullSession(profileId, ses)
 
   const win = new BrowserWindow({
     width: 1280,
@@ -574,7 +763,7 @@ export async function openProfileBrowser(profileId: string, force = false): Prom
 
   const shell = new BrowserShell(win, ses, profile)
   shell.baselineHash = baselineHash
-  shell.setPendingLocalStorage(pendingLs)
+  shell.setPendingState(pendingLs, pendingIdb)
 
   // Atalhos também quando o foco está na barra do navegador (chrome).
   win.webContents.on('before-input-event', (event, input) => {

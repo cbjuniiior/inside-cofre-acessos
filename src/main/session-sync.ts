@@ -40,15 +40,38 @@ function writeMeta(meta: Record<string, SessionMeta>): void {
 
 /**
  * Snapshot do localStorage por origem: `{ "https://app.kiwify.com": { token: "..." } }`.
- * Muitos SPAs (Kiwify, etc.) guardam o token de auth aqui, não em cookie — então
- * sincronizar só cookies não basta para manter a sessão.
+ * Muitos SPAs guardam dados de auth aqui, não em cookie.
  */
 export type LocalStorageMap = Record<string, Record<string, string>>
 
-/** Formato persistido no Supabase (criptografado). */
+/** Uma entrada de object store do IndexedDB (key só existe em store sem keyPath). */
+export interface IdbEntry {
+  key?: unknown
+  value: unknown
+}
+
+/** Definição + dados de um object store. */
+export interface IdbStore {
+  keyPath: string | string[] | null
+  autoIncrement: boolean
+  entries: IdbEntry[]
+}
+
+/** Bancos IndexedDB por origem: origem → dbName → { version, stores }. */
+export type IndexedDbMap = Record<
+  string,
+  Record<string, { version: number; stores: Record<string, IdbStore> }>
+>
+
+/**
+ * Formato persistido no Supabase (criptografado).
+ * Alguns SPAs (Kiwify, apps Firebase) guardam o token de auth no IndexedDB
+ * (ex.: localforage `keyvaluepairs`), então o snapshot precisa incluí-lo.
+ */
 interface StoredSnapshot {
   cookies: Cookie[]
   localStorage?: LocalStorageMap
+  indexedDB?: IndexedDbMap
 }
 
 /** Monta uma URL válida para um cookie a partir do domínio/path armazenado. */
@@ -58,14 +81,18 @@ function cookieUrl(c: Cookie): string {
   return `${scheme}://${domain}${c.path ?? '/'}`
 }
 
-/** Hash estável do conjunto cookies + localStorage — diz se a sessão mudou. */
-function hashState(cookies: Cookie[], ls: LocalStorageMap): string {
+/** Hash estável de cookies + localStorage + IndexedDB — diz se a sessão mudou. */
+function hashState(cookies: Cookie[], ls: LocalStorageMap, idb: IndexedDbMap): string {
   const norm = cookies.map((c) => `${c.domain}|${c.name}|${c.path}|${c.value}`).sort()
   const lsNorm = Object.entries(ls)
     .flatMap(([origin, kv]) => Object.entries(kv).map(([k, v]) => `LS|${origin}|${k}|${v}`))
     .sort()
+  // IndexedDB pode conter valores complexos; um JSON estável basta para detectar mudança.
+  const idbNorm = Object.entries(idb)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([origin, dbs]) => `IDB|${origin}|${JSON.stringify(dbs)}`)
   return createHash('sha256')
-    .update([...norm, ...lsNorm].join('\n'))
+    .update([...norm, ...lsNorm, ...idbNorm].join('\n'))
     .digest('hex')
 }
 
@@ -76,7 +103,7 @@ function hashState(cookies: Cookie[], ls: LocalStorageMap): string {
 export async function pullSession(
   profileId: string,
   ses: Session
-): Promise<{ hash: string; localStorage: LocalStorageMap }> {
+): Promise<{ hash: string; localStorage: LocalStorageMap; indexedDB: IndexedDbMap }> {
   const sb = getSupabase()
   const { data, error } = await sb
     .from('sessions')
@@ -90,15 +117,16 @@ export async function pullSession(
     const parsed = JSON.parse(decrypt(getKey(), data)) as Cookie[] | StoredSnapshot
     const cookies = Array.isArray(parsed) ? parsed : parsed.cookies
     const serverLs: LocalStorageMap = Array.isArray(parsed) ? {} : parsed.localStorage ?? {}
-    const serverHash = hashState(cookies, serverLs)
+    const serverIdb: IndexedDbMap = Array.isArray(parsed) ? {} : parsed.indexedDB ?? {}
+    const serverHash = hashState(cookies, serverLs, serverIdb)
 
     // Pull defensivo: se o snapshot do servidor é exatamente o último push DESTA
     // máquina, ninguém salvou depois de nós — o estado local no disco é igual ou
-    // mais novo (cookies E localStorage persistem na partição). Não injeta nada
-    // para não regredir a sessão; retorna localStorage vazio (mantém o do disco).
+    // mais novo (cookies, localStorage e IndexedDB persistem na partição). Não
+    // injeta nada para não regredir; retorna vazio (mantém o que há no disco).
     const localCookies = await ses.cookies.get({})
     if (localCookies.length > 0 && serverHash === readMeta()[profileId]?.lastPushHash) {
-      return { hash: serverHash, localStorage: {} }
+      return { hash: serverHash, localStorage: {}, indexedDB: {} }
     }
 
     // Outra máquina salvou por último: o servidor é a fonte da verdade.
@@ -124,14 +152,18 @@ export async function pullSession(
       }
     }
 
-    return { hash: hashState(await ses.cookies.get({}), serverLs), localStorage: serverLs }
+    return {
+      hash: hashState(await ses.cookies.get({}), serverLs, serverIdb),
+      localStorage: serverLs,
+      indexedDB: serverIdb
+    }
   }
 
-  return { hash: hashState(await ses.cookies.get({}), {}), localStorage: {} }
+  return { hash: hashState(await ses.cookies.get({}), {}, {}), localStorage: {}, indexedDB: {} }
 }
 
 /**
- * Criptografa cookies + localStorage da sessão e sobe para o Supabase.
+ * Criptografa cookies + localStorage + IndexedDB da sessão e sobe para o Supabase.
  * Se `baselineHash` for informado e nada mudou, NÃO sobrescreve (retorna null).
  * Retorna o novo hash quando salva.
  */
@@ -139,15 +171,16 @@ export async function pushSession(
   profileId: string,
   ses: Session,
   localStorage: LocalStorageMap,
+  indexedDB: IndexedDbMap,
   baselineHash?: string
 ): Promise<string | null> {
   const cookies = await ses.cookies.get({})
-  const hash = hashState(cookies, localStorage)
+  const hash = hashState(cookies, localStorage, indexedDB)
   if (baselineHash && hash === baselineHash) return null // nada mudou — não sobrescreve
 
   const sb = getSupabase()
   const user = await getCurrentUser()
-  const snapshot: StoredSnapshot = { cookies, localStorage }
+  const snapshot: StoredSnapshot = { cookies, localStorage, indexedDB }
   const enc = encrypt(getKey(), JSON.stringify(snapshot))
   const { error } = await sb.from('sessions').upsert(
     {
