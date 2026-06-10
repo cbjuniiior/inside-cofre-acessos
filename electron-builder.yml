@@ -1,0 +1,24 @@
+appId: br.com.inside.cofre-acessos
+productName: Inside Cofre de Acessos
+directories:
+  buildResources: build
+  output: dist
+files:
+  - out/**/*
+  - package.json
+win:
+  target:
+    - nsis
+  artifactName: ${productName}-${version}-setup.${ext}
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+mac:
+  target:
+    - dmg
+  category: public.app-category.productivity
+  artifactName: ${productName}-${version}.${ext}
+# Auto-update via GitHub Releases. No CI (GitHub Actions) o owner/repo são
+# detectados automaticamente; o app passa a procurar updates nos Releases do repo.
+publish:
+  provider: github

@@ -1,0 +1,39 @@
+name: Release
+
+# Dispara quando você sobe uma tag de versão, ex.: v0.2.0
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write # necessário para criar o Release e anexar os instaladores
+
+jobs:
+  release:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - run: npm ci
+
+      - name: Build e publicar (instalador + auto-update)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Mac sem certificado: não tentar assinar (build sai sem notarização)
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          # Credenciais públicas do Supabase, injetadas no build
+          MAIN_VITE_SUPABASE_URL: ${{ secrets.MAIN_VITE_SUPABASE_URL }}
+          MAIN_VITE_SUPABASE_ANON_KEY: ${{ secrets.MAIN_VITE_SUPABASE_ANON_KEY }}
+        run: |
+          npm run build
+          npx electron-builder --publish always
