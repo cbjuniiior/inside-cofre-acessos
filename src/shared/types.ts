@@ -64,6 +64,19 @@ export interface AuditEntry {
   created_at: string
 }
 
+export type AuditCategory = 'perfil' | 'sessao' | 'equipe' | 'cofre' | 'proxy' | 'login'
+
+export interface AuditQuery {
+  /** Texto livre: bate em usuário, perfil, ação e detalhe. */
+  search?: string
+  /** Filtra por e-mail exato de um membro. */
+  userEmail?: string
+  /** Filtra por tipo de ação. */
+  category?: AuditCategory
+  /** Paginação por cursor: só entradas anteriores a este created_at. */
+  before?: string
+}
+
 export type Role = 'admin' | 'member'
 
 export interface AuthUser {

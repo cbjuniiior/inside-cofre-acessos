@@ -5,6 +5,8 @@ import ProfileForm from '../components/ProfileForm'
 import AccountModal from '../components/AccountModal'
 import TeamModal from '../components/TeamModal'
 import ProxyModal from '../components/ProxyModal'
+import LogsModal from '../components/LogsModal'
+import { actionMeta, timeAgo } from '../lib/auditView'
 import logo from '../assets/inside-logo.svg'
 
 const SERVICE_LABEL: Record<Profile['service'], string> = {
@@ -48,30 +50,6 @@ const INSIDE_BADGE = {
   bg: 'bg-brand-500/15'
 }
 
-function actionMeta(action: string): { dot: string } {
-  if (action.includes('abriu')) return { dot: 'bg-sky-400' }
-  if (action.includes('sessão')) return { dot: 'bg-emerald-400' }
-  if (action.includes('criou perfil')) return { dot: 'bg-emerald-400' }
-  if (action.includes('editou perfil')) return { dot: 'bg-amber-400' }
-  if (action.includes('solicitou exclusão')) return { dot: 'bg-amber-400' }
-  if (action.includes('recusou exclusão')) return { dot: 'bg-slate-400' }
-  if (action.includes('excluiu') || action.includes('aprovou exclusão')) return { dot: 'bg-red-400' }
-  if (action.includes('membro') || action.includes('papel') || action.includes('squad'))
-    return { dot: 'bg-purple-400' }
-  if (action.includes('cofre')) return { dot: 'bg-brand-500' }
-  if (action.includes('proxy')) return { dot: 'bg-sky-400' }
-  return { dot: 'bg-slate-400' }
-}
-
-function timeAgo(iso: string): string {
-  const min = Math.floor((Date.now() - new Date(iso).getTime()) / 60000)
-  if (min < 1) return 'agora'
-  if (min < 60) return `há ${min} min`
-  const h = Math.floor(min / 60)
-  if (h < 24) return `há ${h} h`
-  return `há ${Math.floor(h / 24)} d`
-}
-
 interface Props {
   user: AuthUser
   onSignOut: () => void
@@ -104,6 +82,7 @@ export default function Dashboard({ user, onSignOut, onLock, onAccountChanged }:
   const [showAccount, setShowAccount] = useState(false)
   const [showTeam, setShowTeam] = useState(false)
   const [showProxies, setShowProxies] = useState(false)
+  const [showLogs, setShowLogs] = useState(false)
 
   const isAdmin = user.role === 'admin'
 
@@ -300,6 +279,12 @@ export default function Dashboard({ user, onSignOut, onLock, onAccountChanged }:
             <button onClick={() => setShowTeam(true)} className="nav-item">
               <span className="text-base">👥</span>
               Equipe
+            </button>
+          )}
+          {isAdmin && (
+            <button onClick={() => setShowLogs(true)} className="nav-item">
+              <span className="text-base">📜</span>
+              Logs
             </button>
           )}
         </nav>
@@ -586,9 +571,17 @@ export default function Dashboard({ user, onSignOut, onLock, onAccountChanged }:
       {/* ===== Atividade (log — exclusivo de admins) ===== */}
       {isAdmin && (
         <aside className="hidden w-72 shrink-0 flex-col overflow-auto border-l border-white/[0.06] p-5 xl:flex">
-          <h2 className="text-[11px] font-semibold uppercase tracking-widest text-slate-500">
-            Atividade recente
-          </h2>
+          <div className="flex items-baseline justify-between">
+            <h2 className="text-[11px] font-semibold uppercase tracking-widest text-slate-500">
+              Atividade recente
+            </h2>
+            <button
+              onClick={() => setShowLogs(true)}
+              className="text-[11px] font-medium text-brand-300 hover:text-brand-200"
+            >
+              ver tudo →
+            </button>
+          </div>
           <p className="mb-4 text-[10px] text-slate-600">Log de ações da equipe · só admins veem</p>
           {audit.length === 0 ? (
             <p className="text-xs text-slate-600">Sem registros.</p>
@@ -652,6 +645,7 @@ export default function Dashboard({ user, onSignOut, onLock, onAccountChanged }:
       )}
       {showTeam && <TeamModal currentUser={user} onClose={() => setShowTeam(false)} />}
       {showProxies && <ProxyModal onClose={() => setShowProxies(false)} />}
+      {showLogs && <LogsModal onClose={() => setShowLogs(false)} />}
     </div>
   )
 }

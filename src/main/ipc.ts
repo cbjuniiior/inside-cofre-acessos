@@ -8,7 +8,7 @@ import * as proxies from './proxies'
 import { isConfigured } from './supabase'
 import { openProfileBrowser, registerBrowserIpc } from './browser'
 import { installUpdate } from './updater'
-import type { ApiResult, ProfileInput, ProxyInput, Role, Squad } from '../shared/types'
+import type { ApiResult, AuditQuery, ProfileInput, ProxyInput, Role, Squad } from '../shared/types'
 
 function wrap<A extends unknown[], T>(fn: (...args: A) => Promise<T>) {
   return async (_event: Electron.IpcMainInvokeEvent, ...args: unknown[]): Promise<ApiResult<T>> => {
@@ -56,6 +56,7 @@ export function registerIpc(): void {
   ipcMain.handle('profiles:open', wrap((id: string) => openProfileBrowser(id)))
 
   ipcMain.handle('audit:list', wrap(() => audit.listAudit()))
+  ipcMain.handle('audit:query', wrap((q: AuditQuery) => audit.queryAudit(q)))
 
   ipcMain.handle('members:list', wrap(() => members.listMembers()))
   ipcMain.handle('members:setRole', wrap((id: string, role: Role) => members.setMemberRole(id, role)))

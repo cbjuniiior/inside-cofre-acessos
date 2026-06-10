@@ -3,6 +3,7 @@ import type {
   ApiResult,
   AuthUser,
   AuditEntry,
+  AuditQuery,
   Bookmark,
   BrowserProfileInfo,
   Member,
@@ -66,7 +67,8 @@ const api = {
     open: (id: string) => invoke<void>('profiles:open', id)
   },
   audit: {
-    list: () => invoke<AuditEntry[]>('audit:list')
+    list: () => invoke<AuditEntry[]>('audit:list'),
+    query: (q: AuditQuery) => invoke<AuditEntry[]>('audit:query', q)
   },
   members: {
     list: () => invoke<Member[]>('members:list'),
