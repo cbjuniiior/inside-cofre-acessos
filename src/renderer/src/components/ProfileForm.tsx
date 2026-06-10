@@ -1,9 +1,9 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { call } from '../lib/api'
-import type { Profile, ProfileInput, ProfileService, Proxy, Squad } from '../../../shared/types'
+import type { AuthUser, Profile, ProfileInput, ProfileService, Proxy, Squad } from '../../../shared/types'
 
 const SQUAD_OPTIONS: { value: Squad | ''; label: string; dot: string; ring: string }[] = [
-  { value: '', label: 'Nenhuma', dot: 'bg-slate-500', ring: 'peer-checked:border-slate-400' },
+  { value: '', label: 'Inside', dot: 'bg-brand-500', ring: 'peer-checked:border-brand-500' },
   { value: 'genesis', label: 'Gênesis', dot: 'bg-purple-500', ring: 'peer-checked:border-purple-500' },
   { value: 'high_impact', label: 'High Impact', dot: 'bg-red-500', ring: 'peer-checked:border-red-500' }
 ]
@@ -17,12 +17,17 @@ const SERVICE_DEFAULT_URL: Record<ProfileService, string> = {
 
 interface Props {
   profile: Profile | null
+  user: AuthUser
   onClose: () => void
   onSaved: () => void
 }
 
-export default function ProfileForm({ profile, onClose, onSaved }: Props): JSX.Element {
+export default function ProfileForm({ profile, user, onClose, onSaved }: Props): JSX.Element {
   const editing = Boolean(profile)
+  // Membro só cria/edita dentro do que enxerga: Inside ou o próprio squad.
+  const squadOptions = SQUAD_OPTIONS.filter(
+    (o) => user.role === 'admin' || o.value === '' || o.value === user.squad
+  )
   const [clientName, setClientName] = useState(profile?.client_name ?? '')
   const [squad, setSquad] = useState<Squad | ''>(profile?.squad ?? '')
   const [service, setService] = useState<ProfileService>(profile?.service ?? 'gmail')
@@ -93,8 +98,12 @@ export default function ProfileForm({ profile, onClose, onSaved }: Props): JSX.E
         />
 
         <label className="mb-1 block text-sm font-medium text-slate-300">Squad</label>
-        <div className="mb-3 grid grid-cols-3 gap-2">
-          {SQUAD_OPTIONS.map((opt) => (
+        <div
+          className={`mb-3 grid gap-2 ${
+            squadOptions.length === 3 ? 'grid-cols-3' : squadOptions.length === 2 ? 'grid-cols-2' : 'grid-cols-1'
+          }`}
+        >
+          {squadOptions.map((opt) => (
             <label key={opt.value} className="cursor-pointer">
               <input
                 type="radio"
@@ -113,6 +122,10 @@ export default function ProfileForm({ profile, onClose, onSaved }: Props): JSX.E
             </label>
           ))}
         </div>
+        <p className="-mt-2 mb-3 text-[11px] text-slate-500">
+          <b>Inside</b> = visível para toda a equipe. Gênesis/High Impact = visível só para o
+          squad (admins veem tudo).
+        </p>
 
         <label className="mb-1 block text-sm font-medium text-slate-300">Serviço</label>
         <select

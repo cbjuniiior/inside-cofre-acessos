@@ -1,6 +1,12 @@
 import { useEffect, useState } from 'react'
 import { call } from '../lib/api'
-import type { AuthUser, Member, Role, VaultAccess } from '../../../shared/types'
+import type { AuthUser, Member, Role, Squad, VaultAccess } from '../../../shared/types'
+
+const SQUAD_CHOICES: { value: Squad | ''; label: string }[] = [
+  { value: '', label: 'Inside (toda a equipe)' },
+  { value: 'genesis', label: 'Gênesis' },
+  { value: 'high_impact', label: 'High Impact' }
+]
 
 interface Props {
   currentUser: AuthUser
@@ -51,6 +57,7 @@ export default function TeamModal({ currentUser, onClose }: Props): JSX.Element 
   const [tempFor, setTempFor] = useState<{ name: string; password: string } | null>(null)
   const [newEmail, setNewEmail] = useState('')
   const [newName, setNewName] = useState('')
+  const [newSquad, setNewSquad] = useState<Squad | ''>('')
   const [creating, setCreating] = useState(false)
   const [loginTemp, setLoginTemp] = useState<{ email: string; password: string } | null>(null)
   const [copied, setCopied] = useState('')
@@ -91,6 +98,15 @@ export default function TeamModal({ currentUser, onClose }: Props): JSX.Element 
     }
   }
 
+  async function setSquad(m: Member, squad: Squad | null): Promise<void> {
+    try {
+      await call(window.api.members.setSquad(m.id, squad))
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Erro ao alterar squad')
+    }
+  }
+
   async function grant(m: Member): Promise<void> {
     setError('')
     try {
@@ -116,10 +132,13 @@ export default function TeamModal({ currentUser, onClose }: Props): JSX.Element 
     setCreating(true)
     setError('')
     try {
-      const r = await call(window.api.members.create(newEmail.trim(), newName.trim()))
+      const r = await call(
+        window.api.members.create(newEmail.trim(), newName.trim(), newSquad === '' ? null : newSquad)
+      )
       setLoginTemp({ email: r.email, password: r.tempPassword })
       setNewEmail('')
       setNewName('')
+      setNewSquad('')
       await load()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Erro ao adicionar membro')
@@ -165,6 +184,18 @@ export default function TeamModal({ currentUser, onClose }: Props): JSX.Element 
               placeholder="e-mail"
               className="field min-w-[160px] flex-1"
             />
+            <select
+              value={newSquad}
+              onChange={(e) => setNewSquad(e.target.value as Squad | '')}
+              className="field min-w-[150px] flex-1"
+              title="Squad do membro: define quais acessos ele enxerga"
+            >
+              {SQUAD_CHOICES.map((s) => (
+                <option key={s.value} value={s.value}>
+                  {s.label}
+                </option>
+              ))}
+            </select>
             <button
               onClick={addMember}
               disabled={creating || !newEmail.trim()}
@@ -173,6 +204,10 @@ export default function TeamModal({ currentUser, onClose }: Props): JSX.Element 
               {creating ? 'Criando…' : 'Adicionar'}
             </button>
           </div>
+          <p className="mt-2 text-[11px] text-slate-500">
+            Membro de um squad vê os acessos do squad + os marcados como Inside. Membro Inside vê
+            só os acessos Inside. Admins veem tudo.
+          </p>
           {loginTemp && (
             <div className="mt-3 rounded-lg border border-brand-500/40 bg-brand-500/10 p-3 text-sm text-slate-200">
               <p className="mb-2 font-medium text-white">✅ Membro criado</p>
@@ -294,6 +329,22 @@ export default function TeamModal({ currentUser, onClose }: Props): JSX.Element 
                           Conceder acesso
                         </button>
                       )}
+
+                      {/* Squad */}
+                      <select
+                        value={m.squad ?? ''}
+                        onChange={(e) =>
+                          setSquad(m, e.target.value === '' ? null : (e.target.value as Squad))
+                        }
+                        className="field w-auto shrink-0 px-2 py-1 text-xs"
+                        title="Define quais acessos este membro enxerga"
+                      >
+                        {SQUAD_CHOICES.map((s) => (
+                          <option key={s.value} value={s.value}>
+                            {s.value === '' ? 'Inside' : s.label}
+                          </option>
+                        ))}
+                      </select>
 
                       {/* Papel */}
                       <div className="flex shrink-0 items-center gap-1 rounded-lg border border-white/10 bg-ink-800 p-1">

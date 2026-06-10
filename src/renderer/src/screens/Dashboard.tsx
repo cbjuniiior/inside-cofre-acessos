@@ -39,7 +39,38 @@ const SQUAD: Record<Squad, { label: string; dot: string; text: string; bg: strin
 }
 
 type ViewMode = 'list' | 'cards'
-type SquadFilter = 'all' | Squad
+type SquadFilter = 'all' | 'inside' | Squad
+
+const INSIDE_BADGE = {
+  label: 'Inside',
+  dot: 'bg-brand-500',
+  text: 'text-brand-300',
+  bg: 'bg-brand-500/15'
+}
+
+function actionMeta(action: string): { dot: string } {
+  if (action.includes('abriu')) return { dot: 'bg-sky-400' }
+  if (action.includes('sessão')) return { dot: 'bg-emerald-400' }
+  if (action.includes('criou perfil')) return { dot: 'bg-emerald-400' }
+  if (action.includes('editou perfil')) return { dot: 'bg-amber-400' }
+  if (action.includes('solicitou exclusão')) return { dot: 'bg-amber-400' }
+  if (action.includes('recusou exclusão')) return { dot: 'bg-slate-400' }
+  if (action.includes('excluiu') || action.includes('aprovou exclusão')) return { dot: 'bg-red-400' }
+  if (action.includes('membro') || action.includes('papel') || action.includes('squad'))
+    return { dot: 'bg-purple-400' }
+  if (action.includes('cofre')) return { dot: 'bg-brand-500' }
+  if (action.includes('proxy')) return { dot: 'bg-sky-400' }
+  return { dot: 'bg-slate-400' }
+}
+
+function timeAgo(iso: string): string {
+  const min = Math.floor((Date.now() - new Date(iso).getTime()) / 60000)
+  if (min < 1) return 'agora'
+  if (min < 60) return `há ${min} min`
+  const h = Math.floor(min / 60)
+  if (h < 24) return `há ${h} h`
+  return `há ${Math.floor(h / 24)} d`
+}
 
 interface Props {
   user: AuthUser
@@ -48,8 +79,8 @@ interface Props {
   onAccountChanged: () => void
 }
 
-function SquadBadge({ squad }: { squad: Squad }): JSX.Element {
-  const s = SQUAD[squad]
+function SquadBadge({ squad }: { squad: Squad | null }): JSX.Element {
+  const s = squad ? SQUAD[squad] : INSIDE_BADGE
   return (
     <span className={`inline-flex items-center gap-1 rounded-full ${s.bg} px-2 py-0.5 text-[10px] font-medium ${s.text}`}>
       <span className={`h-1.5 w-1.5 rounded-full ${s.dot}`} />
@@ -81,22 +112,26 @@ export default function Dashboard({ user, onSignOut, onLock, onAccountChanged }:
     localStorage.setItem('cofre_view', v)
   }
 
-  const load = useCallback(async (silent = false) => {
-    if (!silent) setLoading(true)
-    setError('')
-    try {
-      const [p, a] = await Promise.all([
-        call(window.api.profiles.list()),
-        call(window.api.audit.list())
-      ])
-      setProfiles(p)
-      setAudit(a)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Erro ao carregar')
-    } finally {
-      if (!silent) setLoading(false)
-    }
-  }, [])
+  const load = useCallback(
+    async (silent = false) => {
+      if (!silent) setLoading(true)
+      setError('')
+      try {
+        const [p, a] = await Promise.all([
+          call(window.api.profiles.list()),
+          // O log de atividades é exclusivo de admins.
+          isAdmin ? call(window.api.audit.list()) : Promise.resolve([] as AuditEntry[])
+        ])
+        setProfiles(p)
+        setAudit(a)
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Erro ao carregar')
+      } finally {
+        if (!silent) setLoading(false)
+      }
+    },
+    [isAdmin]
+  )
 
   useEffect(() => {
     void load()
@@ -124,12 +159,48 @@ export default function Dashboard({ user, onSignOut, onLock, onAccountChanged }:
   }
 
   async function remove(p: Profile): Promise<void> {
-    if (!confirm(`Excluir o perfil "${p.client_name}"? A sessão salva também será removida.`)) return
+    if (isAdmin) {
+      if (!confirm(`Excluir o perfil "${p.client_name}"? A sessão salva também será removida.`)) return
+      try {
+        await call(window.api.profiles.remove(p.id))
+        await load()
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Erro ao excluir')
+      }
+      return
+    }
+    // Membro não exclui direto: solicita e um admin aprova ou recusa.
+    if (
+      !confirm(
+        `Solicitar a exclusão de "${p.client_name}"? O perfil ficará oculto até um admin aprovar.`
+      )
+    )
+      return
     try {
-      await call(window.api.profiles.remove(p.id))
+      await call(window.api.profiles.requestDelete(p.id))
       await load()
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Erro ao excluir')
+      setError(e instanceof Error ? e.message : 'Erro ao solicitar exclusão')
+    }
+  }
+
+  async function approveDelete(p: Profile): Promise<void> {
+    if (!confirm(`Aprovar a exclusão de "${p.client_name}"? A sessão salva também será removida.`))
+      return
+    try {
+      await call(window.api.profiles.approveDelete(p.id))
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Erro ao aprovar exclusão')
+    }
+  }
+
+  async function rejectDelete(p: Profile): Promise<void> {
+    try {
+      await call(window.api.profiles.rejectDelete(p.id))
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Erro ao recusar exclusão')
     }
   }
 
@@ -143,8 +214,13 @@ export default function Dashboard({ user, onSignOut, onLock, onAccountChanged }:
     onSignOut()
   }
 
-  const filtered = profiles.filter((p) => {
-    if (squadFilter !== 'all' && p.squad !== squadFilter) return false
+  // Exclusões pendentes ficam fora da lista principal; admins as veem na fila de aprovação.
+  const pendingDeletes = profiles.filter((p) => p.pending_delete)
+  const activeProfiles = profiles.filter((p) => !p.pending_delete)
+
+  const filtered = activeProfiles.filter((p) => {
+    if (squadFilter === 'inside' ? p.squad !== null : squadFilter !== 'all' && p.squad !== squadFilter)
+      return false
     const q = search.toLowerCase()
     return (
       p.client_name.toLowerCase().includes(q) ||
@@ -166,33 +242,39 @@ export default function Dashboard({ user, onSignOut, onLock, onAccountChanged }:
           Abrir
         </button>
         {isAdmin && (
-          <>
-            <button
-              onClick={() => {
-                setEditing(p)
-                setShowForm(true)
-              }}
-              className="rounded-lg border border-white/[0.08] px-3 py-1.5 text-xs font-medium text-slate-300 transition hover:bg-white/5"
-            >
-              Editar
-            </button>
-            <button
-              onClick={() => remove(p)}
-              className="rounded-lg border border-white/[0.08] px-3 py-1.5 text-xs font-medium text-red-400 transition hover:bg-red-500/10"
-            >
-              Excluir
-            </button>
-          </>
+          <button
+            onClick={() => {
+              setEditing(p)
+              setShowForm(true)
+            }}
+            className="rounded-lg border border-white/[0.08] px-3 py-1.5 text-xs font-medium text-slate-300 transition hover:bg-white/5"
+          >
+            Editar
+          </button>
         )}
+        <button
+          onClick={() => remove(p)}
+          className="rounded-lg border border-white/[0.08] px-3 py-1.5 text-xs font-medium text-red-400 transition hover:bg-red-500/10"
+          title={isAdmin ? 'Excluir perfil' : 'Solicitar exclusão (um admin precisa aprovar)'}
+        >
+          Excluir
+        </button>
       </div>
     )
   }
 
+  // Membros só enxergam o próprio squad + Inside; o filtro acompanha isso.
   const squadFilters: { value: SquadFilter; label: string; dot?: string }[] = [
     { value: 'all', label: 'Todas' },
-    { value: 'genesis', label: 'Gênesis', dot: 'bg-purple-500' },
-    { value: 'high_impact', label: 'High Impact', dot: 'bg-red-500' }
+    { value: 'inside', label: 'Inside', dot: 'bg-brand-500' },
+    ...(isAdmin || user.squad === 'genesis'
+      ? [{ value: 'genesis' as const, label: 'Gênesis', dot: 'bg-purple-500' }]
+      : []),
+    ...(isAdmin || user.squad === 'high_impact'
+      ? [{ value: 'high_impact' as const, label: 'High Impact', dot: 'bg-red-500' }]
+      : [])
   ]
+  const showSquadFilter = isAdmin || user.squad !== null
 
   return (
     <div className="flex h-full">
@@ -206,7 +288,7 @@ export default function Dashboard({ user, onSignOut, onLock, onAccountChanged }:
           <div className="nav-item nav-active cursor-default">
             <span className="text-base">🗂️</span>
             Perfis
-            <span className="ml-auto font-mono text-xs text-slate-500">{profiles.length}</span>
+            <span className="ml-auto font-mono text-xs text-slate-500">{activeProfiles.length}</span>
           </div>
           {isAdmin && (
             <button onClick={() => setShowProxies(true)} className="nav-item">
@@ -254,21 +336,19 @@ export default function Dashboard({ user, onSignOut, onLock, onAccountChanged }:
           <div>
             <h1 className="font-display text-xl font-bold text-white">Perfis</h1>
             <p className="text-xs text-slate-500">
-              <span className="font-mono text-slate-400">{profiles.length}</span> contas ·{' '}
+              <span className="font-mono text-slate-400">{activeProfiles.length}</span> contas ·{' '}
               <span className="font-mono text-slate-400">{filtered.length}</span> exibidas
             </p>
           </div>
-          {isAdmin && (
-            <button
-              onClick={() => {
-                setEditing(null)
-                setShowForm(true)
-              }}
-              className="btn-primary"
-            >
-              + Novo perfil
-            </button>
-          )}
+          <button
+            onClick={() => {
+              setEditing(null)
+              setShowForm(true)
+            }}
+            className="btn-primary"
+          >
+            + Novo perfil
+          </button>
         </header>
 
         {/* Toolbar */}
@@ -292,20 +372,22 @@ export default function Dashboard({ user, onSignOut, onLock, onAccountChanged }:
             />
           </div>
 
-          <div className="flex items-center gap-1 rounded-xl border border-white/[0.07] bg-ink-850 p-1">
-            {squadFilters.map((f) => (
-              <button
-                key={f.value}
-                onClick={() => setSquadFilter(f.value)}
-                className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition ${
-                  squadFilter === f.value ? 'bg-white/10 text-white' : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                {f.dot && <span className={`h-1.5 w-1.5 rounded-full ${f.dot}`} />}
-                {f.label}
-              </button>
-            ))}
-          </div>
+          {showSquadFilter && (
+            <div className="flex items-center gap-1 rounded-xl border border-white/[0.07] bg-ink-850 p-1">
+              {squadFilters.map((f) => (
+                <button
+                  key={f.value}
+                  onClick={() => setSquadFilter(f.value)}
+                  className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition ${
+                    squadFilter === f.value ? 'bg-white/10 text-white' : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  {f.dot && <span className={`h-1.5 w-1.5 rounded-full ${f.dot}`} />}
+                  {f.label}
+                </button>
+              ))}
+            </div>
+          )}
 
           <div className="flex items-center gap-1 rounded-xl border border-white/[0.07] bg-ink-850 p-1">
             <button
@@ -328,6 +410,50 @@ export default function Dashboard({ user, onSignOut, onLock, onAccountChanged }:
         </div>
 
         {error && <p className="mx-7 mt-3 text-sm text-red-400">{error}</p>}
+
+        {/* Fila de exclusões aguardando aprovação (só admins) */}
+        {isAdmin && pendingDeletes.length > 0 && (
+          <div className="mx-7 mt-5 rounded-xl border border-amber-500/30 bg-amber-500/[0.07] p-4">
+            <p className="mb-3 text-sm font-semibold text-amber-300">
+              ⏳ Exclusões aguardando aprovação ({pendingDeletes.length})
+            </p>
+            <ul className="space-y-2">
+              {pendingDeletes.map((p) => (
+                <li
+                  key={p.id}
+                  className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-white/10 bg-ink-850 p-3"
+                >
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <p className="truncate text-sm font-medium text-white">{p.client_name}</p>
+                      <SquadBadge squad={p.squad} />
+                    </div>
+                    <p className="text-xs text-slate-500">
+                      solicitada por {p.delete_requested_by_name || 'membro'}
+                      {p.delete_requested_at
+                        ? ` · ${new Date(p.delete_requested_at).toLocaleString('pt-BR')}`
+                        : ''}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 gap-2">
+                    <button
+                      onClick={() => approveDelete(p)}
+                      className="rounded-lg bg-red-500/90 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-red-500"
+                    >
+                      Aprovar exclusão
+                    </button>
+                    <button
+                      onClick={() => rejectDelete(p)}
+                      className="rounded-lg border border-white/[0.08] px-3 py-1.5 text-xs font-medium text-slate-300 transition hover:bg-white/5"
+                    >
+                      Recusar
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         <div className="min-h-0 flex-1 overflow-auto px-7 pb-7 pt-5">
           {loading ? (
@@ -355,7 +481,7 @@ export default function Dashboard({ user, onSignOut, onLock, onAccountChanged }:
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
                         <p className="truncate font-medium text-white">{p.client_name}</p>
-                        {p.squad && <SquadBadge squad={p.squad} />}
+                        <SquadBadge squad={p.squad} />
                       </div>
                       <p className="truncate font-mono text-xs text-slate-500">
                         {SERVICE_LABEL[p.service]} · {p.url}
@@ -431,7 +557,7 @@ export default function Dashboard({ user, onSignOut, onLock, onAccountChanged }:
                     </div>
 
                     <div className="mt-3 flex flex-wrap items-center gap-1">
-                      {p.squad && <SquadBadge squad={p.squad} />}
+                      <SquadBadge squad={p.squad} />
                       {p.tags.map((t) => (
                         <span key={t} className="rounded bg-white/5 px-1.5 py-0.5 text-[11px] text-slate-400">
                           {t}
@@ -457,39 +583,63 @@ export default function Dashboard({ user, onSignOut, onLock, onAccountChanged }:
         </div>
       </main>
 
-      {/* ===== Atividade ===== */}
-      <aside className="hidden w-72 shrink-0 flex-col overflow-auto border-l border-white/[0.06] p-5 xl:flex">
-        <h2 className="mb-4 text-[11px] font-semibold uppercase tracking-widest text-slate-500">
-          Atividade recente
-        </h2>
-        {audit.length === 0 ? (
-          <p className="text-xs text-slate-600">Sem registros.</p>
-        ) : (
-          <ul className="space-y-3.5">
-            {audit.slice(0, 30).map((a) => (
-              <li key={a.id} className="flex gap-3 text-xs">
-                <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-brand-500/60" />
-                <div className="min-w-0">
-                  <p className="text-slate-300">
-                    <span className="font-medium text-white">
-                      {a.user_name || a.user_email || 'alguém'}
-                    </span>{' '}
-                    {a.action}
-                    {a.profile_name ? <span className="text-slate-500"> · {a.profile_name}</span> : ''}
-                  </p>
-                  <p className="mt-0.5 font-mono text-[10px] text-slate-600">
-                    {new Date(a.created_at).toLocaleString('pt-BR')}
-                  </p>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </aside>
+      {/* ===== Atividade (log — exclusivo de admins) ===== */}
+      {isAdmin && (
+        <aside className="hidden w-72 shrink-0 flex-col overflow-auto border-l border-white/[0.06] p-5 xl:flex">
+          <h2 className="text-[11px] font-semibold uppercase tracking-widest text-slate-500">
+            Atividade recente
+          </h2>
+          <p className="mb-4 text-[10px] text-slate-600">Log de ações da equipe · só admins veem</p>
+          {audit.length === 0 ? (
+            <p className="text-xs text-slate-600">Sem registros.</p>
+          ) : (
+            <ul className="space-y-3.5">
+              {audit.slice(0, 50).map((a) => (
+                <li key={a.id} className="flex gap-3 text-xs">
+                  <span
+                    className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${actionMeta(a.action).dot}`}
+                  />
+                  <div className="min-w-0">
+                    <p className="text-slate-300">
+                      <span className="font-medium text-white">
+                        {a.user_name || a.user_email || 'alguém'}
+                      </span>{' '}
+                      {a.action}
+                      {a.profile_name ? (
+                        <span className="text-slate-400"> · {a.profile_name}</span>
+                      ) : (
+                        ''
+                      )}
+                    </p>
+                    {a.detail && (
+                      <p className="mt-0.5 text-[11px] text-slate-500" title={a.detail}>
+                        {a.detail}
+                      </p>
+                    )}
+                    <p
+                      className="mt-0.5 font-mono text-[10px] text-slate-600"
+                      title={new Date(a.created_at).toLocaleString('pt-BR')}
+                    >
+                      {timeAgo(a.created_at)} ·{' '}
+                      {new Date(a.created_at).toLocaleString('pt-BR', {
+                        day: '2-digit',
+                        month: '2-digit',
+                        hour: '2-digit',
+                        minute: '2-digit'
+                      })}
+                    </p>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </aside>
+      )}
 
       {showForm && (
         <ProfileForm
           profile={editing}
+          user={user}
           onClose={() => setShowForm(false)}
           onSaved={async () => {
             setShowForm(false)

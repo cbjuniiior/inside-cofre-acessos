@@ -5,6 +5,7 @@ import { getSupabase } from './supabase'
 import { getKey } from './vault'
 import { encrypt, decrypt } from './crypto'
 import { getCurrentUser } from './auth'
+import { logAudit } from './audit'
 import type { Proxy, ProxyInput, ProxyProtocol } from '../shared/types'
 
 interface ProxyRow {
@@ -63,6 +64,7 @@ export async function createProxy(input: ProxyInput): Promise<Proxy> {
     .select('*')
     .single()
   if (error) throw new Error(error.message)
+  await logAudit('criou proxy', null, input.label, `${input.protocol}://${input.host}:${input.port}`)
   return rowToProxy(data as ProxyRow)
 }
 
@@ -81,13 +83,16 @@ export async function updateProxy(id: string, input: ProxyInput): Promise<Proxy>
     .select('*')
     .single()
   if (error) throw new Error(error.message)
+  await logAudit('editou proxy', null, input.label, `${input.protocol}://${input.host}:${input.port}`)
   return rowToProxy(data as ProxyRow)
 }
 
 export async function removeProxy(id: string): Promise<void> {
   const sb = getSupabase()
+  const { data } = await sb.from('proxies').select('label').eq('id', id).maybeSingle()
   const { error } = await sb.from('proxies').delete().eq('id', id)
   if (error) throw new Error(error.message)
+  await logAudit('excluiu proxy', null, data?.label ?? null)
 }
 
 interface ProxyConfig {

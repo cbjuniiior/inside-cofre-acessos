@@ -1,5 +1,5 @@
 import { getSupabase } from './supabase'
-import type { AuthUser, Role } from '../shared/types'
+import type { AuthUser, Role, Squad } from '../shared/types'
 import type { User } from '@supabase/supabase-js'
 
 function nameFromMetadata(meta: Record<string, unknown> | undefined, email: string): string {
@@ -12,11 +12,13 @@ async function resolveUser(user: User): Promise<AuthUser> {
   const email = user.email ?? ''
   const name = nameFromMetadata(user.user_metadata, email)
   const sb = getSupabase()
-  // Upsert preserva o role existente (não enviamos role no payload).
+  // Upsert preserva role e squad existentes (não enviamos esses campos no payload).
   await sb.from('members').upsert({ id: user.id, email, name }, { onConflict: 'id' })
-  const { data } = await sb.from('members').select('role').eq('id', user.id).maybeSingle()
+  const { data } = await sb.from('members').select('role, squad').eq('id', user.id).maybeSingle()
   const role: Role = data?.role === 'admin' ? 'admin' : 'member'
-  return { id: user.id, email, name, role }
+  const squad: Squad | null =
+    data?.squad === 'genesis' || data?.squad === 'high_impact' ? data.squad : null
+  return { id: user.id, email, name, role, squad }
 }
 
 export async function signIn(email: string, password: string): Promise<AuthUser> {

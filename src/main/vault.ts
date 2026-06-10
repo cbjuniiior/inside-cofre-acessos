@@ -1,8 +1,15 @@
 import { randomBytes } from 'crypto'
 import { getSupabase } from './supabase'
 import { getCurrentUser } from './auth'
+import { logAudit } from './audit'
 import { deriveKey, newSalt, newDek, wrapKey, unwrapKey, makeVerifier, checkVerifier } from './crypto'
 import type { VaultStatus, VaultAccess } from '../shared/types'
+
+async function memberName(userId: string): Promise<string | null> {
+  const sb = getSupabase()
+  const { data } = await sb.from('members').select('name, email').eq('id', userId).maybeSingle()
+  return data?.name ?? data?.email ?? null
+}
 
 // A DEK (chave dos dados) vive SOMENTE em memória, no processo main.
 let dek: Buffer | null = null
@@ -188,6 +195,7 @@ export async function grantAccess(userId: string): Promise<string> {
   if (!dek) throw new Error('Destrave o cofre antes de conceder acesso.')
   const temp = randomBytes(6).toString('base64url') // ~8 caracteres legíveis
   await upsertSlot(userId, temp, true)
+  await logAudit('concedeu acesso ao cofre', null, await memberName(userId))
   return temp
 }
 
@@ -196,6 +204,7 @@ export async function revokeAccess(userId: string): Promise<void> {
   const sb = getSupabase()
   const { error } = await sb.from('vault_keys').delete().eq('user_id', userId)
   if (error) throw new Error(error.message)
+  await logAudit('revogou acesso ao cofre', null, await memberName(userId))
 }
 
 /** Lista quem tem slot de acesso ao cofre (para a tela de Equipe do admin). */

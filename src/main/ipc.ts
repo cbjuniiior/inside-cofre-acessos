@@ -8,7 +8,7 @@ import * as proxies from './proxies'
 import { isConfigured } from './supabase'
 import { openProfileBrowser, registerBrowserIpc } from './browser'
 import { installUpdate } from './updater'
-import type { ApiResult, ProfileInput, ProxyInput, Role } from '../shared/types'
+import type { ApiResult, ProfileInput, ProxyInput, Role, Squad } from '../shared/types'
 
 function wrap<A extends unknown[], T>(fn: (...args: A) => Promise<T>) {
   return async (_event: Electron.IpcMainInvokeEvent, ...args: unknown[]): Promise<ApiResult<T>> => {
@@ -23,7 +23,14 @@ function wrap<A extends unknown[], T>(fn: (...args: A) => Promise<T>) {
 export function registerIpc(): void {
   ipcMain.handle('config:status', wrap(async () => ({ configured: isConfigured() })))
 
-  ipcMain.handle('auth:signIn', wrap((email: string, password: string) => auth.signIn(email, password)))
+  ipcMain.handle(
+    'auth:signIn',
+    wrap(async (email: string, password: string) => {
+      const user = await auth.signIn(email, password)
+      void audit.logAudit('entrou no app', null, null)
+      return user
+    })
+  )
   ipcMain.handle('auth:signOut', wrap(() => auth.signOut()))
   ipcMain.handle('auth:currentUser', wrap(() => auth.getCurrentUser()))
   ipcMain.handle('auth:updateName', wrap((name: string) => auth.updateName(name)))
@@ -43,13 +50,20 @@ export function registerIpc(): void {
   ipcMain.handle('profiles:create', wrap((input: ProfileInput) => profiles.createProfile(input)))
   ipcMain.handle('profiles:update', wrap((id: string, input: ProfileInput) => profiles.updateProfile(id, input)))
   ipcMain.handle('profiles:remove', wrap((id: string) => profiles.removeProfile(id)))
+  ipcMain.handle('profiles:requestDelete', wrap((id: string) => profiles.requestDeleteProfile(id)))
+  ipcMain.handle('profiles:approveDelete', wrap((id: string) => profiles.approveDeleteProfile(id)))
+  ipcMain.handle('profiles:rejectDelete', wrap((id: string) => profiles.rejectDeleteProfile(id)))
   ipcMain.handle('profiles:open', wrap((id: string) => openProfileBrowser(id)))
 
   ipcMain.handle('audit:list', wrap(() => audit.listAudit()))
 
   ipcMain.handle('members:list', wrap(() => members.listMembers()))
   ipcMain.handle('members:setRole', wrap((id: string, role: Role) => members.setMemberRole(id, role)))
-  ipcMain.handle('members:create', wrap((email: string, name: string) => members.createMember(email, name)))
+  ipcMain.handle('members:setSquad', wrap((id: string, squad: Squad | null) => members.setMemberSquad(id, squad)))
+  ipcMain.handle(
+    'members:create',
+    wrap((email: string, name: string, squad: Squad | null) => members.createMember(email, name, squad))
+  )
   ipcMain.handle('members:remove', wrap((userId: string) => members.deleteMember(userId)))
 
   ipcMain.handle('proxies:list', wrap(() => proxies.listProxies()))

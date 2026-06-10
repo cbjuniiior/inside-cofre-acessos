@@ -36,6 +36,10 @@ export interface Profile {
   in_use_by_name: string | null
   in_use_at: string | null
   has_session: boolean
+  pending_delete: boolean
+  delete_requested_by: string | null
+  delete_requested_by_name: string | null
+  delete_requested_at: string | null
   updated_at: string
   created_at: string
 }
@@ -56,6 +60,7 @@ export interface AuditEntry {
   user_email: string | null
   user_name: string | null
   action: string
+  detail: string | null
   created_at: string
 }
 
@@ -66,6 +71,7 @@ export interface AuthUser {
   email: string
   name: string
   role: Role
+  squad: Squad | null
 }
 
 export interface Member {
@@ -73,6 +79,7 @@ export interface Member {
   email: string | null
   name: string | null
   role: Role
+  squad: Squad | null
 }
 
 export interface Bookmark {

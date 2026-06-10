@@ -11,6 +11,7 @@ import type {
   Proxy,
   ProxyInput,
   Role,
+  Squad,
   TabState,
   VaultAccess,
   VaultStatus
@@ -59,6 +60,9 @@ const api = {
     create: (input: ProfileInput) => invoke<Profile>('profiles:create', input),
     update: (id: string, input: ProfileInput) => invoke<Profile>('profiles:update', id, input),
     remove: (id: string) => invoke<void>('profiles:remove', id),
+    requestDelete: (id: string) => invoke<void>('profiles:requestDelete', id),
+    approveDelete: (id: string) => invoke<void>('profiles:approveDelete', id),
+    rejectDelete: (id: string) => invoke<void>('profiles:rejectDelete', id),
     open: (id: string) => invoke<void>('profiles:open', id)
   },
   audit: {
@@ -67,8 +71,9 @@ const api = {
   members: {
     list: () => invoke<Member[]>('members:list'),
     setRole: (id: string, role: Role) => invoke<void>('members:setRole', id, role),
-    create: (email: string, name: string) =>
-      invoke<{ tempPassword: string; email: string }>('members:create', email, name),
+    setSquad: (id: string, squad: Squad | null) => invoke<void>('members:setSquad', id, squad),
+    create: (email: string, name: string, squad: Squad | null) =>
+      invoke<{ tempPassword: string; email: string }>('members:create', email, name, squad),
     remove: (userId: string) => invoke<void>('members:remove', userId)
   },
   proxies: {
