@@ -1,8 +1,19 @@
 import { app, shell, BrowserWindow } from 'electron'
 import { join } from 'path'
 import { registerIpc } from './ipc'
-import { getProxyCredsFor } from './browser'
+import { getProxyCredsFor, chromeUserAgent } from './browser'
 import { initAutoUpdate } from './updater'
+
+// Remove o token `Electron/<versão>` do User-Agent a nível de processo (afeta
+// todas as janelas/sessions de forma coerente). É o sinal mais óbvio de webview;
+// mantemos o resto do UA e os Client Hints nativos para não criar incoerência.
+app.userAgentFallback = chromeUserAgent()
+
+// Desabilita WebAuthn/passkey: a tela de login do Google dispara automaticamente
+// o prompt "Inserir chave de segurança na porta USB". Como essas contas logam
+// com senha, suprimir o WebAuthn leva o fluxo direto ao campo de senha.
+// (Switch deve ser aplicado antes do app ficar pronto.)
+app.commandLine.appendSwitch('disable-features', 'WebAuthentication')
 
 let mainWindow: BrowserWindow | null = null
 

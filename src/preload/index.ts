@@ -64,7 +64,7 @@ const api = {
     requestDelete: (id: string) => invoke<void>('profiles:requestDelete', id),
     approveDelete: (id: string) => invoke<void>('profiles:approveDelete', id),
     rejectDelete: (id: string) => invoke<void>('profiles:rejectDelete', id),
-    open: (id: string) => invoke<void>('profiles:open', id)
+    open: (id: string, force?: boolean) => invoke<void>('profiles:open', id, force ?? false)
   },
   audit: {
     list: () => invoke<AuditEntry[]>('audit:list'),

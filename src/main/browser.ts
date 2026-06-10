@@ -3,7 +3,7 @@ import { join } from 'path'
 import { getSupabase } from './supabase'
 import { getCurrentUser } from './auth'
 import { logAudit } from './audit'
-import { pullSession, pushSession } from './session-sync'
+import { pullSession, pushSession, type LocalStorageMap } from './session-sync'
 import { resolveProfileProxy } from './proxies'
 import type { Bookmark, TabState } from '../shared/types'
 
@@ -14,6 +14,28 @@ interface ProfileRow {
   squad: 'genesis' | 'high_impact' | null
   url: string
   proxy_id: string | null
+  in_use_by: string | null
+  in_use_by_email: string | null
+  in_use_by_name: string | null
+  in_use_at: string | null
+}
+
+// Janela em que o lock de "em uso" é considerado vivo (heartbeat renova a cada 2 min).
+const LOCK_FRESH_MS = 5 * 60 * 1000
+
+/**
+ * User-Agent nativo do Chromium do Electron SEM o token `Electron/<versão>`.
+ *
+ * Importante: NÃO forjamos um UA de Chrome inteiro nem reescrevemos os User-Agent
+ * Client Hints (Sec-CH-UA). Forçar esses valores cria um conjunto de sinais
+ * incoerente (UA spoofado vs. client hints reais/parciais do Electron) que é
+ * justamente o que o servidor do Google usa para barrar webviews. Manter tudo
+ * nativo e coerente, removendo apenas o token óbvio `Electron/`, é a abordagem
+ * usada pelo gmail-desktop/meru e a que tem maior chance de passar no login.
+ */
+export function chromeUserAgent(): string {
+  const base = app.userAgentFallback || ''
+  return base.replace(/ Electron\/[^ ]+/, '')
 }
 
 // Mapas globais para o handler de autenticação de proxy (app.on('login')).
@@ -66,6 +88,23 @@ class BrowserShell {
   baselineHash = ''
   private needsLogin = false
   private saveTimer: ReturnType<typeof setInterval> | null = null
+  private cookiePushTimer: ReturnType<typeof setTimeout> | null = null
+  // localStorage vindo do servidor a injetar nas abas (por origem) + controle.
+  private pendingLocalStorage: LocalStorageMap = {}
+  private restoredOrigins = new Set<string>()
+  // Último localStorage capturado (fallback quando as abas já foram destruídas).
+  private lastLocalStorage: LocalStorageMap = {}
+
+  // Push quase imediato quando cookies mudam: o Google rotaciona os tokens de
+  // sessão (__Secure-*PSIDTS) a cada ~30 min e invalida tudo se outra máquina
+  // injetar um token antigo. Subir a rotação na hora fecha essa janela.
+  private onCookieChanged = (): void => {
+    if (this.cookiePushTimer) return // já há um push agendado — agrupa a rajada
+    this.cookiePushTimer = setTimeout(() => {
+      this.cookiePushTimer = null
+      void this.saveSession()
+    }, 5000)
+  }
 
   constructor(win: BrowserWindow, ses: Session, profile: ProfileRow) {
     this.win = win
@@ -74,6 +113,7 @@ class BrowserShell {
     win.on('resize', () => this.layout())
     // Heartbeat: mantém o "em uso" fresco e auto-salva a sessão (só sobe se mudou).
     this.saveTimer = setInterval(() => void this.heartbeat(), 2 * 60 * 1000)
+    ses.cookies.on('changed', this.onCookieChanged)
   }
 
   /** Atualiza in_use_at (mantém o lock vivo) e salva a sessão se mudou. */
@@ -89,10 +129,73 @@ class BrowserShell {
     await this.saveSession()
   }
 
-  /** Salva a sessão se os cookies mudaram desde o último baseline. */
+  setPendingLocalStorage(ls: LocalStorageMap): void {
+    this.pendingLocalStorage = ls
+  }
+
+  /** Lê o localStorage de cada aba aberta, agrupado por origem. */
+  private async captureLocalStorage(): Promise<LocalStorageMap> {
+    const map: LocalStorageMap = {}
+    for (const view of this.tabs.values()) {
+      const wc = view.webContents
+      if (wc.isDestroyed()) continue
+      let origin: string
+      try {
+        const u = new URL(wc.getURL())
+        if (u.protocol !== 'http:' && u.protocol !== 'https:') continue
+        origin = u.origin
+      } catch {
+        continue
+      }
+      try {
+        const json = (await wc.executeJavaScript('JSON.stringify(window.localStorage)')) as string
+        const entries = JSON.parse(json) as Record<string, string>
+        if (entries && Object.keys(entries).length) map[origin] = entries
+      } catch {
+        /* aba sem acesso ao localStorage — ignora */
+      }
+    }
+    return map
+  }
+
+  /**
+   * Injeta o localStorage do servidor na aba (uma vez por origem) e recarrega,
+   * para o SPA inicializar já autenticado. Sem isso, sites que guardam o token
+   * no localStorage (Kiwify etc.) abrem deslogados mesmo com os cookies certos.
+   */
+  private async restoreLocalStorageInto(wc: Electron.WebContents): Promise<void> {
+    if (wc.isDestroyed()) return
+    let origin: string
+    try {
+      origin = new URL(wc.getURL()).origin
+    } catch {
+      return
+    }
+    const data = this.pendingLocalStorage[origin]
+    if (!data || this.restoredOrigins.has(origin)) return
+    this.restoredOrigins.add(origin)
+    const script = `(() => { try { const d = ${JSON.stringify(
+      data
+    )}; for (const k in d) localStorage.setItem(k, d[k]); return true } catch (e) { return false } })()`
+    try {
+      const ok = (await wc.executeJavaScript(script)) as boolean
+      if (ok && !wc.isDestroyed()) wc.reload()
+    } catch {
+      /* não conseguiu injetar — segue sem restaurar */
+    }
+  }
+
+  /** Salva a sessão (cookies + localStorage) se algo mudou desde o baseline. */
   async saveSession(): Promise<'saved' | 'unchanged'> {
     try {
-      const h = await pushSession(this.profile.id, this.ses, this.baselineHash)
+      let ls = this.lastLocalStorage
+      try {
+        ls = await this.captureLocalStorage()
+        this.lastLocalStorage = ls
+      } catch {
+        /* abas indisponíveis — usa o último localStorage capturado */
+      }
+      const h = await pushSession(this.profile.id, this.ses, ls, this.baselineHash)
       if (h) {
         this.baselineHash = h
         return 'saved'
@@ -108,6 +211,25 @@ class BrowserShell {
     if (this.saveTimer) {
       clearInterval(this.saveTimer)
       this.saveTimer = null
+    }
+    if (this.cookiePushTimer) {
+      clearTimeout(this.cookiePushTimer)
+      this.cookiePushTimer = null
+    }
+    this.ses.cookies.removeListener('changed', this.onCookieChanged)
+  }
+
+  /** Último save + liberação do lock antes do app encerrar. */
+  async flushForQuit(): Promise<void> {
+    this.stopAutoSave()
+    try {
+      await this.saveSession()
+      await getSupabase()
+        .from('profiles')
+        .update({ in_use_by: null, in_use_by_email: null, in_use_by_name: null, in_use_at: null })
+        .eq('id', this.profile.id)
+    } catch (e) {
+      console.error('Erro no flush de sessão ao encerrar:', e)
     }
   }
 
@@ -174,6 +296,7 @@ class BrowserShell {
         this.updateWindowTitle()
       }
     }
+    wc.on('dom-ready', () => void this.restoreLocalStorageInto(wc))
     wc.on('page-title-updated', update)
     wc.on('did-navigate', update)
     wc.on('did-navigate-in-page', update)
@@ -379,7 +502,7 @@ async function removeBookmark(id: string): Promise<void> {
   if (error) throw new Error(error.message)
 }
 
-export async function openProfileBrowser(profileId: string): Promise<void> {
+export async function openProfileBrowser(profileId: string, force = false): Promise<void> {
   const existing = shellByProfileId.get(profileId)
   if (existing && !existing.win.isDestroyed()) {
     existing.win.focus()
@@ -392,6 +515,17 @@ export async function openProfileBrowser(profileId: string): Promise<void> {
   const { data, error } = await sb.from('profiles').select('*').eq('id', profileId).single()
   if (error) throw new Error(error.message)
   const profile = data as ProfileRow
+
+  // Lock duro: uso simultâneo rotaciona tokens em duas máquinas e o Google
+  // derruba a sessão. Só abre por cima com confirmação explícita (force).
+  const lockFresh =
+    profile.in_use_at != null && Date.now() - new Date(profile.in_use_at).getTime() < LOCK_FRESH_MS
+  if (!force && lockFresh && profile.in_use_by && profile.in_use_by !== user?.id) {
+    const who = profile.in_use_by_name || profile.in_use_by_email || 'outro usuário'
+    throw new Error(
+      `Perfil em uso por ${who}. Abrir em duas máquinas ao mesmo tempo pode derrubar a sessão.`
+    )
+  }
 
   await sb
     .from('profiles')
@@ -419,7 +553,7 @@ export async function openProfileBrowser(profileId: string): Promise<void> {
     await ses.setProxy({ mode: 'direct' })
   }
 
-  const baselineHash = await pullSession(profileId, ses)
+  const { hash: baselineHash, localStorage: pendingLs } = await pullSession(profileId, ses)
 
   const win = new BrowserWindow({
     width: 1280,
@@ -440,6 +574,7 @@ export async function openProfileBrowser(profileId: string): Promise<void> {
 
   const shell = new BrowserShell(win, ses, profile)
   shell.baselineHash = baselineHash
+  shell.setPendingLocalStorage(pendingLs)
 
   // Atalhos também quando o foco está na barra do navegador (chrome).
   win.webContents.on('before-input-event', (event, input) => {
@@ -459,12 +594,14 @@ export async function openProfileBrowser(profileId: string): Promise<void> {
 
   await logAudit('abriu perfil', profileId, profile.client_name)
 
-  win.on('closed', () => {
-    shell.stopAutoSave()
-    shellByWindowId.delete(win.id)
-    shellByProfileId.delete(profileId)
-    proxyCreds.delete(profileId)
-    void (async () => {
+  // Intercepta o 'close' (antes da destruição) para salvar com as abas ainda
+  // vivas — essencial para capturar o localStorage, que some quando a aba morre.
+  let closeHandled = false
+  win.on('close', (e) => {
+    if (closeHandled || flushingQuit) return // já tratado, ou o before-quit cuida do flush
+    e.preventDefault()
+    closeHandled = true
+    const save = (async () => {
       try {
         const result = await shell.saveSession()
         await sb
@@ -474,10 +611,43 @@ export async function openProfileBrowser(profileId: string): Promise<void> {
         if (result === 'saved') await logAudit('salvou sessão', profileId, profile.client_name)
       } catch (e) {
         console.error('Erro ao salvar a sessão ao fechar o perfil:', e)
+      } finally {
+        shell.stopAutoSave()
+        if (!win.isDestroyed()) win.destroy()
       }
     })()
+    pendingSaves.add(save)
+    void save.finally(() => pendingSaves.delete(save))
+  })
+
+  win.on('closed', () => {
+    shell.stopAutoSave()
+    shellByWindowId.delete(win.id)
+    shellByProfileId.delete(profileId)
+    proxyCreds.delete(profileId)
   })
 }
+
+// ===== Flush garantido no encerramento do app =====
+// O save no 'closed' é assíncrono; se o app sair junto (última janela fechada,
+// quit pelo menu, etc.), o push para o Supabase morre no meio e o servidor fica
+// com um snapshot velho — receita de desconexão do Gmail. Aqui seguramos o quit
+// até todos os saves terminarem (com teto de 10s para nunca travar a saída).
+const pendingSaves = new Set<Promise<unknown>>()
+let flushingQuit = false
+
+app.on('before-quit', (event) => {
+  if (flushingQuit) return
+  const shells = [...shellByProfileId.values()].filter((s) => !s.win.isDestroyed())
+  if (shells.length === 0 && pendingSaves.size === 0) return
+  event.preventDefault()
+  flushingQuit = true
+  const timeout = new Promise((resolve) => setTimeout(resolve, 10_000))
+  void Promise.race([
+    Promise.allSettled([...shells.map((s) => s.flushForQuit()), ...pendingSaves]),
+    timeout
+  ]).then(() => app.quit())
+})
 
 export function registerBrowserIpc(): void {
   const shellOf = (e: Electron.IpcMainInvokeEvent): BrowserShell | null => {

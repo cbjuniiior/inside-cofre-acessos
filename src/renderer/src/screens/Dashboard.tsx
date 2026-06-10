@@ -128,12 +128,28 @@ export default function Dashboard({ user, onSignOut, onLock, onAccountChanged }:
     return Date.now() - new Date(p.in_use_at).getTime() < 10 * 60 * 1000
   }
 
-  async function open(p: Profile): Promise<void> {
+  function confirmOpenInUse(who: string | null): boolean {
+    return confirm(
+      `Este perfil está em uso por ${who || 'outro usuário'}. Abrir em dois lugares ao mesmo tempo pode derrubar a sessão (especialmente Gmail).\n\nAbrir mesmo assim?`
+    )
+  }
+
+  async function open(p: Profile, force = false): Promise<void> {
+    if (!force && inUse(p)) {
+      if (!confirmOpenInUse(p.in_use_by_name || p.in_use_by_email)) return
+      force = true
+    }
     try {
-      await call(window.api.profiles.open(p.id))
+      await call(window.api.profiles.open(p.id, force))
       await load(true)
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Erro ao abrir o perfil')
+      const msg = e instanceof Error ? e.message : 'Erro ao abrir o perfil'
+      // Lock detectado no servidor (a lista local podia estar desatualizada).
+      if (!force && msg.includes('em uso por')) {
+        if (confirmOpenInUse(null)) await open(p, true)
+        return
+      }
+      setError(msg)
     }
   }
 

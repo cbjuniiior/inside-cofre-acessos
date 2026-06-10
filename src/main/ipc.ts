@@ -53,7 +53,7 @@ export function registerIpc(): void {
   ipcMain.handle('profiles:requestDelete', wrap((id: string) => profiles.requestDeleteProfile(id)))
   ipcMain.handle('profiles:approveDelete', wrap((id: string) => profiles.approveDeleteProfile(id)))
   ipcMain.handle('profiles:rejectDelete', wrap((id: string) => profiles.rejectDeleteProfile(id)))
-  ipcMain.handle('profiles:open', wrap((id: string) => openProfileBrowser(id)))
+  ipcMain.handle('profiles:open', wrap((id: string, force?: boolean) => openProfileBrowser(id, force ?? false)))
 
   ipcMain.handle('audit:list', wrap(() => audit.listAudit()))
   ipcMain.handle('audit:query', wrap((q: AuditQuery) => audit.queryAudit(q)))
